@@ -1,3 +1,5 @@
+import functools
+import operator
 import typing
 # 3rd party
 import kkpyutil as util
@@ -17,7 +19,8 @@ class TensorFactory:
         self.dtype = dtype
         self.requires_grad = requires_grad
 
-    def ramp(self, size: typing.Union[list, tuple], start, end):
+    def ramp(self, size: typing.Union[list, tuple], start=1):
+        end = start + functools.reduce(operator.mul, size)
         return tc.arange(start, end).reshape(*size).to(self.device, self.dtype, self.requires_grad)
 
     def rand_repro(self, size: typing.Union[list, tuple], seed=42):
