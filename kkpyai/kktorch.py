@@ -22,6 +22,9 @@ class TensorFactory:
 
     @staticmethod
     def can_use_gpu():
+        """
+        - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
+        """
         return tc.backends.mps.is_available() if util.PLATFORM == 'Darwin' else tc.cuda.is_available()
 
     def ramp(self, size: typing.Union[list, tuple], start=1):
