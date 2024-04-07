@@ -9,23 +9,26 @@ import torch as tc
 # region tensor ops
 
 class TensorFactory:
-    def __init__(self, device='cpu', dtype=tc.float32, requires_grad=False):
-        self.device = device
+    def __init__(self, device=None, dtype=tc.float32, requires_grad=False):
+        self.device = tc.device(device) if device else self.find_fastest_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
-    def init(self, device=None, dtype=tc.float32, requires_grad=False):
-        gpu = 'mps' if util.PLATFORM == 'Darwin' else 'cuda'
-        self.device = tc.device(device or (gpu if self.can_use_gpu() else 'cpu'))
+    def init(self, device: str = '', dtype=tc.float32, requires_grad=False):
+        self.device = tc.device(device) if device else self.find_fastest_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
     @staticmethod
-    def can_use_gpu():
+    def find_fastest_device():
         """
         - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
         """
-        return tc.backends.mps.is_available() if util.PLATFORM == 'Darwin' else tc.cuda.is_available()
+        if util.PLATFORM == 'Darwin':
+            return 'mps' if tc.backends.mps.is_available() else 'cpu'
+        if tc.cuda.is_available():
+            return 'cuda'
+        return 'cpu'
 
     def ramp(self, size: typing.Union[list, tuple], start=1):
         """
@@ -45,3 +48,11 @@ class TensorFactory:
 
 
 # endregion
+
+
+def test():
+    pass
+
+
+if __name__ == '__main__':
+    test()

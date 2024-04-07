@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "kkpyai"
-version = "0.2.1"
+version = "0.2.2"
 description = "Utility over popular low-level AI API"
 authors = ["Beinan Li <li.beinan@gmail.com>"]
 readme = "README.md"
@@ -11,6 +11,9 @@ kkpyutil = "*"
 torch = "*"
 tensorflow = "*"
 
+[tool.poetry.dev-dependencies]
+pytest = "^6.2"
+coverage = "^5.5"
 
 [build-system]
 requires = ["poetry-core"]
