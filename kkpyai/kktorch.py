@@ -20,12 +20,16 @@ class TensorFactory:
         self.requires_grad = requires_grad
 
     def ramp(self, size: typing.Union[list, tuple], start=1):
+        """
+        - ramp is easier to understand than random numbers
+        - so they can come in handy for debugging and test-drive
+        """
         end = start + functools.reduce(operator.mul, size)
         return tc.arange(start, end).reshape(*size).to(self.device, self.dtype, self.requires_grad)
 
     def rand_repro(self, size: typing.Union[list, tuple], seed=42):
         """
-        - to reproduce a random tensor n times, simply call this method with the same seed
+        - to reproduce a random tensor n times, simply call this method with the same seed (flavor of randomness)
         - to start a new reproducible sequence, call this method with a new seed
         """
         tc.manual_seed(seed)
