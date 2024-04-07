@@ -16,7 +16,7 @@ class TensorFactory:
 
     def init(self, device=None, dtype=tc.float32, requires_grad=False):
         gpu = 'mps' if util.PLATFORM == 'Darwin' else 'cuda'
-        self.device = device or (gpu if self.can_use_gpu() else 'cpu')
+        self.device = tc.device(device or (gpu if self.can_use_gpu() else 'cpu'))
         self.dtype = dtype
         self.requires_grad = requires_grad
 
