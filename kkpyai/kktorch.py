@@ -43,7 +43,10 @@ class TensorFactory:
         - to reproduce a random tensor n times, simply call this method with the same seed (flavor of randomness)
         - to start a new reproducible sequence, call this method with a new seed
         """
-        tc.manual_seed(seed)
+        if self.device == 'cuda':
+            tc.cuda.manual_seed(seed)
+        else:
+            tc.manual_seed(seed)
         return tc.rand(size, device=self.device, dtype=self.dtype, requires_grad=self.requires_grad)
 
 
