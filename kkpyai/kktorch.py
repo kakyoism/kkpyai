@@ -1,9 +1,12 @@
 import functools
 import operator
+import os
+import os.path as osp
 import typing
 # 3rd party
 import kkpyutil as util
 import torch as tc
+import matplotlib.pyplot as plt
 
 
 # region tensor ops
@@ -49,6 +52,72 @@ class TensorFactory:
             tc.manual_seed(seed)
         return tc.rand(size, device=self.device, dtype=self.dtype, requires_grad=self.requires_grad)
 
+
+# endregion
+
+
+# region dataset
+
+def split_dataset(data, labels, train_ratio=0.8, validation_ratio=0):
+    """
+    - split dataset into training and testing sets
+    """
+    split_train = int(train_ratio * len(data))
+    split_val = int(validation_ratio * len(data))
+    X_train, y_train = data[:split_train], labels[:split_train]
+    X_test, y_test = data[split_train:], labels[split_train:]
+    if validation_ratio:
+        X_val, y_val = X_test[:split_val], y_test[:split_val]
+        X_test, y_test = X_test[split_val:], y_test[split_val:]
+        train_set = {'data': X_train, 'labels': y_train}
+        test_set = {'data': X_test, 'labels': y_test}
+        validation_set = {'data': X_val, 'labels': y_val}
+        return train_set, test_set, validation_set
+    train_set = {'data': X_train, 'labels': y_train}
+    test_set = {'data': X_test, 'labels': y_test}
+    return train_set, test_set, validation_ratio
+
+# endregion
+
+
+# region visualization
+
+class Plot:
+    def __init__(self, *args, **kwargs):
+        self.legendConfig = {'prop': {'size': 14}}
+        self.useBlocking = True
+
+    def plot_predictions(self, train_set, test_set, predictions=None):
+        """
+        - sets contain data and labels
+        """
+        fig, ax = plt.subplots(figsize=(10, 7))
+        ax.scatter(train_set['data'], train_set['labels'], s=4, color='blue', label='Training Data')
+        ax.scatter(test_set['data'], test_set['labels'], s=4, color='green', label='Testing Data')
+        if predictions is not None:
+            ax.scatter(test_set['data'], predictions, s=4, color='red', label='Predictions')
+        ax.legend(prop=self.legendConfig['prop'])
+        plt.show(block=self.useBlocking)
+
+    def block(self):
+        self.useBlocking = True
+
+    def unblock(self):
+        self.useBlocking = False
+
+    @staticmethod
+    def export_png(path=osp.join(util.get_platform_home_dir(), 'Desktop', 'plot.png')):
+        os.makedirs(osp.dirname(path), exist_ok=True)
+        plt.savefig(path, format='png')
+
+    @staticmethod
+    def export_svg(path):
+        os.makedirs(osp.dirname(path), exist_ok=True)
+        plt.savefig(path, format='svg')
+
+    @staticmethod
+    def close():
+        plt.close()
 
 # endregion
 

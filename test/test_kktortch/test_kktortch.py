@@ -1,12 +1,12 @@
 import os.path as osp
 import sys
-
+# 3rd party
+import kkpyutil as util
+import torch as tc
 
 # project
 _script_dir = osp.abspath(osp.dirname(__file__))
 sys.path.insert(0, repo_root := osp.abspath(f'{_script_dir}/../../kkpyai'))
-import kkpyutil as util
-import torch as tc
 import kktorch as ktc
 
 _case_dir = _script_dir
@@ -29,3 +29,41 @@ def test_factory_rand_repro():
     got1 = fact.rand_repro((2, 2), 42)
     got2 = fact.rand_repro((2, 2), 42)
     assert tc.allclose(got1, got2)
+
+
+def test_plot_predictions():
+    # Create a Linear Regression model class
+    class LinearRegressionModel(tc.nn.Module):  # <- almost everything in PyTorch is a nn.Module (think of this as neural network lego blocks)
+        def __init__(self):
+            super().__init__()
+            self.weights = tc.nn.Parameter(tc.randn(1,  # <- start with random weights (this will get adjusted as the model learns)
+                                                    dtype=tc.float),  # <- PyTorch loves float32 by default
+                                           requires_grad=True)  # <- can we update this value with gradient descent?)
+
+            self.bias = tc.nn.Parameter(tc.randn(1,  # <- start with random bias (this will get adjusted as the model learns)
+                                                 dtype=tc.float),  # <- PyTorch loves float32 by default
+                                        requires_grad=True)  # <- can we update this value with gradient descent?))
+
+        # Forward defines the computation in the model
+        def forward(self, x: tc.Tensor) -> tc.Tensor:  # <- "x" is the input data (e.g. training/testing features)
+            return self.weights * x + self.bias  # <- this is the linear regression formula (y = m*x + b)
+
+    model = LinearRegressionModel()
+    weight, bias = 0.7, 0.3
+    start, end, step = 0, 1, 0.02
+    X = tc.arange(start, end, step).unsqueeze(dim=1)
+    y = weight * X + bias
+    train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
+    with tc.inference_mode():
+        y_preds = model(test_set['data'])
+    plot = ktc.Plot()
+    plot.unblock()
+    plot.plot_predictions(train_set, test_set, y_preds)
+    assert True
+    plot.export_png(pic := osp.join(_gen_dir, 'plot_predictions.png'))
+    assert osp.isfile(pic)
+    util.safe_remove(pic)
+    plot.export_svg(pic := osp.join(_gen_dir, 'plot_predictions.svg'))
+    assert osp.isfile(pic)
+    plot.close()
+    util.safe_remove(pic)
