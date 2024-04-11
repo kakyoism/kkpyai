@@ -82,6 +82,13 @@ def test_model():
     y = weight * X + bias
     train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
     model = ktc.Model(model, lossfn_name='MSELoss', optm_name='SGD', learning_rate=0.01)
-    model.train(train_set, n_epochs=2000)
+    model.train(train_set, test_set, n_epochs=2000, verbose=True)
+    model.evaluate(test_set, verbose=True)
     y_preds = model.predict(test_set)
     assert tc.allclose(y_preds, test_set['labels'], atol=0.1)
+    model.save('test_model')
+    assert osp.isfile(mdl := osp.join(util.get_platform_tmp_dir(), 'torch', 'test_model.pth'))
+    model.load('test_model')
+    util.safe_remove(mdl)
+    model.close_plot()
+

@@ -7,6 +7,7 @@ import typing
 import kkpyutil as util
 import torch as tc
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 # region globals
@@ -99,6 +100,7 @@ class Model(Loggable):
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{lossfn_name}()')
         self.optimizer = eval(f'tc.optim.{optm_name}(self.model.parameters(), lr={learning_rate})')
+        self.plot = Plot()
 
     def set_lossfunction(self, lossfn_name='L1Loss'):
         """
@@ -117,6 +119,7 @@ class Model(Loggable):
         X_train = train_set['data'].to(self.device)
         y_train = train_set['labels'].to(self.device)
         pred = {'preds': None, 'loss': None}
+        losses = {'train': [], 'test': []}
         if test_set:
             X_test = test_set['data'].to(self.device)
             y_test = test_set['labels'].to(self.device)
@@ -136,13 +139,24 @@ class Model(Loggable):
             self.optimizer.step()
             if test_set:
                 pred = self.evaluate(test_set)
+                if verbose:
+                    losses['train'].append(loss.cpu().detach().numpy())
+                    losses['test'].append(pred['loss'].cpu().detach().numpy())
             if verbose and epoch % log_every_n_epochs == 0:
                 msg = f"Epoch: {epoch} | Train Loss: {loss} | Test Loss: {pred['loss']}" if test_set else f"Epoch: {epoch} | Train Loss: {loss}"
                 self.logger.info(msg)
+        if verbose:
+            # plot predictions
+            self.plot.unblock()
+            self.plot.plot_predictions(train_set, test_set, pred['pred'])
+            self.plot.plot_learning(losses['train'], losses['test'])
         # final test predictions
         return pred
 
-    def evaluate(self, test_set):
+    def evaluate(self, test_set, verbose=False):
+        """
+        - test_set must contain ground-truth labels
+        """
         X_test = test_set['data'].to(self.device)
         y_test = test_set['labels'].to(self.device)
         # Testing
@@ -153,12 +167,15 @@ class Model(Loggable):
             test_pred = self.model(X_test)
             # - compute loss
             test_loss = self.lossFunction(test_pred, y_test)
+        if verbose:
+            self.logger.info(f'Test Loss: {test_loss}')
+            self.plot.unblock()
+            self.plot.plot_predictions(None, test_set, test_pred)
         return {'pred': test_pred, 'loss': test_loss}
 
     def predict(self, test_set):
         """
-        - we predict when test_set has no labels
-        - otherwise we evaluate the model
+        - test_set can have no labels
         """
         X_test = test_set['data'].to(self.device)
         test_set['labels'] = test_set['labels'].to(self.device)
@@ -169,6 +186,9 @@ class Model(Loggable):
         with tc.inference_mode():
             predictions = self.model(X_test)
         return predictions.to(self.device)
+
+    def close_plot(self):
+        self.plot.close()
 
     def save(self, model_basename=None, optimized=True):
         ext = '.pth' if optimized else '.pt'
@@ -183,7 +203,7 @@ class Model(Loggable):
 
     @staticmethod
     def _compose_model_name(model_basename, ext):
-        return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}.{ext}')
+        return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}{ext}')
 
 # endregion
 
@@ -200,10 +220,24 @@ class Plot:
         - sets contain data and labels
         """
         fig, ax = plt.subplots(figsize=(10, 7))
-        ax.scatter(train_set['data'], train_set['labels'], s=4, color='blue', label='Training Data')
-        ax.scatter(test_set['data'], test_set['labels'], s=4, color='green', label='Testing Data')
+        if train_set:
+            ax.scatter(train_set['data'].cpu(), train_set['labels'].cpu(), s=4, color='blue', label='Training Data')
+        if test_set:
+            ax.scatter(test_set['data'].cpu(), test_set['labels'].cpu(), s=4, color='green', label='Testing Data')
         if predictions is not None:
-            ax.scatter(test_set['data'], predictions, s=4, color='red', label='Predictions')
+            ax.scatter(test_set['data'].cpu(), predictions.cpu(), s=4, color='red', label='Predictions')
+        ax.legend(prop=self.legendConfig['prop'])
+        plt.show(block=self.useBlocking)
+
+    def plot_learning(self, train_losses, test_losses=None):
+        fig, ax = plt.subplots(figsize=(10, 7))
+        if train_losses is not None:
+            ax.plot(train_losses, label='Training Loss', color='blue')
+        if test_losses is not None:
+            ax.plot(test_losses, label='Testing Loss', color='orange')
+        ax.set_title('Learning Curves')
+        ax.set_ylabel("Loss")
+        ax.set_xlabel("Epochs")
         ax.legend(prop=self.legendConfig['prop'])
         plt.show(block=self.useBlocking)
 
