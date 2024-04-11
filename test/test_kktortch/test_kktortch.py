@@ -62,3 +62,26 @@ def test_plot_predictions():
     assert osp.isfile(pic)
     plot.close()
     util.safe_remove(pic)
+
+
+def test_model():
+    # Create a Linear Regression model class
+    class LinearRegressionModel(tc.nn.Module):  # <- almost everything in PyTorch is a nn.Module (think of this as neural network lego blocks)
+        def __init__(self):
+            super().__init__()
+            self.linear_layer = nn.Linear(in_features=1, out_features=1)
+
+        # Forward defines the computation in the model
+        def forward(self, x: tc.Tensor) -> tc.Tensor:  # <- "x" is the input data (e.g. training/testing features)
+            return self.linear_layer(x)
+
+    model = LinearRegressionModel()
+    weight, bias = 0.7, 0.3
+    start, end, step = 0, 1, 0.02
+    X = tc.arange(start, end, step).unsqueeze(dim=1)
+    y = weight * X + bias
+    train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
+    model = ktc.Model(model, lossfn_name='MSELoss', optm_name='SGD', learning_rate=0.01)
+    model.train(train_set, n_epochs=2000)
+    y_preds = model.predict(test_set)
+    assert tc.allclose(y_preds, test_set['labels'], atol=0.1)

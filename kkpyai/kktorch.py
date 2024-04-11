@@ -9,29 +9,39 @@ import torch as tc
 import matplotlib.pyplot as plt
 
 
+# region globals
+
+def find_fastest_device():
+    """
+    - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
+    """
+    if util.PLATFORM == 'Darwin':
+        return 'mps' if tc.backends.mps.is_available() else 'cpu'
+    if tc.cuda.is_available():
+        return 'cuda'
+    return 'cpu'
+
+
+class Loggable:
+    def __init__(self, logger=None):
+        self.logger = logger or util.glogger
+
+# endregion
+
+
 # region tensor ops
 
-class TensorFactory:
-    def __init__(self, device=None, dtype=tc.float32, requires_grad=False):
-        self.device = tc.device(device) if device else self.find_fastest_device()
+class TensorFactory(Loggable):
+    def __init__(self, device=None, dtype=tc.float32, requires_grad=False, logger=None):
+        super().__init__(logger)
+        self.device = tc.device(device) if device else find_fastest_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
     def init(self, device: str = '', dtype=tc.float32, requires_grad=False):
-        self.device = tc.device(device) if device else self.find_fastest_device()
+        self.device = tc.device(device) if device else find_fastest_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
-
-    @staticmethod
-    def find_fastest_device():
-        """
-        - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
-        """
-        if util.PLATFORM == 'Darwin':
-            return 'mps' if tc.backends.mps.is_available() else 'cpu'
-        if tc.cuda.is_available():
-            return 'cuda'
-        return 'cpu'
 
     def ramp(self, size: typing.Union[list, tuple], start=1):
         """
@@ -76,6 +86,104 @@ def split_dataset(data, labels, train_ratio=0.8, validation_ratio=0):
     train_set = {'data': X_train, 'labels': y_train}
     test_set = {'data': X_test, 'labels': y_test}
     return train_set, test_set, validation_ratio
+
+# endregion
+
+# region model
+
+
+class Model(Loggable):
+    def __init__(self, model, lossfn_name='L1Loss', optm_name='SGD', learning_rate=0.01, device_name=None, logger=None):
+        super().__init__(logger)
+        self.device = device_name or find_fastest_device()
+        self.model = model.to(self.device)
+        self.lossFunction = eval(f'tc.nn.{lossfn_name}()')
+        self.optimizer = eval(f'tc.optim.{optm_name}(self.model.parameters(), lr={learning_rate})')
+
+    def set_lossfunction(self, lossfn_name='L1Loss'):
+        """
+        - ref: https://pytorch.org/docs/stable/nn.html#loss-functions
+        """
+        self.lossFunction = eval(f'nn.{lossfn_name}()')
+
+    def set_optimizer(self, opt_name='SGD', learning_rate=0.01):
+        """
+        - ref: https://pytorch.org/docs/stable/optim.html#algorithms
+        """
+        self.optimizer = eval(f'tc.optim.{opt_name}(self.model.parameters(), lr={learning_rate})')
+
+    def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
+        tc.manual_seed(seed)
+        X_train = train_set['data'].to(self.device)
+        y_train = train_set['labels'].to(self.device)
+        pred = {'preds': None, 'loss': None}
+        if test_set:
+            X_test = test_set['data'].to(self.device)
+            y_test = test_set['labels'].to(self.device)
+        for epoch in range(n_epochs):
+            # Training
+            # - train mode is on by default after construction
+            self.model.train()
+            # - forward pass
+            y_pred = self.model(X_train)
+            # - compute loss
+            loss = self.lossFunction(y_pred, y_train)
+            # - reset grad before backpropagation
+            self.optimizer.zero_grad()
+            # - backpropagation
+            loss.backward()
+            # - update weights and biases
+            self.optimizer.step()
+            if test_set:
+                pred = self.evaluate(test_set)
+            if verbose and epoch % log_every_n_epochs == 0:
+                msg = f"Epoch: {epoch} | Train Loss: {loss} | Test Loss: {pred['loss']}" if test_set else f"Epoch: {epoch} | Train Loss: {loss}"
+                self.logger.info(msg)
+        # final test predictions
+        return pred
+
+    def evaluate(self, test_set):
+        X_test = test_set['data'].to(self.device)
+        y_test = test_set['labels'].to(self.device)
+        # Testing
+        # - eval mode is on by default after construction
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            test_pred = self.model(X_test)
+            # - compute loss
+            test_loss = self.lossFunction(test_pred, y_test)
+        return {'pred': test_pred, 'loss': test_loss}
+
+    def predict(self, test_set):
+        """
+        - we predict when test_set has no labels
+        - otherwise we evaluate the model
+        """
+        X_test = test_set['data'].to(self.device)
+        test_set['labels'] = test_set['labels'].to(self.device)
+        # Testing
+        # - eval mode is on by default after construction
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            predictions = self.model(X_test)
+        return predictions.to(self.device)
+
+    def save(self, model_basename=None, optimized=True):
+        ext = '.pth' if optimized else '.pt'
+        path = self._compose_model_name(model_basename, ext)
+        os.makedirs(osp.dirname(path), exist_ok=True)
+        tc.save(self.model.state_dict(), path)
+
+    def load(self, model_basename=None, optimized=True):
+        ext = '.pth' if optimized else '.pt'
+        path = self._compose_model_name(model_basename, ext)
+        self.model.load_state_dict(tc.load(path))
+
+    @staticmethod
+    def _compose_model_name(model_basename, ext):
+        return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}.{ext}')
 
 # endregion
 
