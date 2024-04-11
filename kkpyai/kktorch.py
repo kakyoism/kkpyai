@@ -12,7 +12,7 @@ import numpy as np
 
 # region globals
 
-def find_fastest_device():
+def find_fast_device():
     """
     - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
     """
@@ -35,12 +35,12 @@ class Loggable:
 class TensorFactory(Loggable):
     def __init__(self, device=None, dtype=tc.float32, requires_grad=False, logger=None):
         super().__init__(logger)
-        self.device = tc.device(device) if device else find_fastest_device()
+        self.device = tc.device(device) if device else find_fast_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
     def init(self, device: str = '', dtype=tc.float32, requires_grad=False):
-        self.device = tc.device(device) if device else find_fastest_device()
+        self.device = tc.device(device) if device else find_fast_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
@@ -96,7 +96,7 @@ def split_dataset(data, labels, train_ratio=0.8, validation_ratio=0):
 class Model(Loggable):
     def __init__(self, model, lossfn_name='L1Loss', optm_name='SGD', learning_rate=0.01, device_name=None, logger=None):
         super().__init__(logger)
-        self.device = device_name or find_fastest_device()
+        self.device = device_name or find_fast_device()
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{lossfn_name}()')
         self.optimizer = eval(f'tc.optim.{optm_name}(self.model.parameters(), lr={learning_rate})')
