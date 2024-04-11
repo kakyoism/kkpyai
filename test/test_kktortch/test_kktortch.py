@@ -81,7 +81,7 @@ def test_model():
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
     train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
-    model = ktc.Model(model, lossfn_name='MSELoss', optm_name='SGD', learning_rate=0.01)
+    model = ktc.Model(model, loss_fn='MSELoss', optm='SGD', learning_rate=0.01)
     model.train(train_set, test_set, n_epochs=2000, verbose=True)
     model.evaluate(test_set, verbose=True)
     y_preds = model.predict(test_set)

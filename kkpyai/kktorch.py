@@ -94,19 +94,21 @@ def split_dataset(data, labels, train_ratio=0.8, validation_ratio=0):
 
 
 class Model(Loggable):
-    def __init__(self, model, lossfn_name='L1Loss', optm_name='SGD', learning_rate=0.01, device_name=None, logger=None):
+    LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
+
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
         super().__init__(logger)
         self.device = device_name or find_fast_device()
         self.model = model.to(self.device)
-        self.lossFunction = eval(f'tc.nn.{lossfn_name}()')
-        self.optimizer = eval(f'tc.optim.{optm_name}(self.model.parameters(), lr={learning_rate})')
+        self.lossFunction = eval(f'tc.nn.{loss_fn}()') if isinstance(loss_fn, str) else loss_fn
+        self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
         self.plot = Plot()
 
-    def set_lossfunction(self, lossfn_name='L1Loss'):
+    def set_lossfunction(self, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss'):
         """
         - ref: https://pytorch.org/docs/stable/nn.html#loss-functions
         """
-        self.lossFunction = eval(f'nn.{lossfn_name}()')
+        self.lossFunction = eval(f'nn.{loss_fn}()') if isinstance(loss_fn, str) else loss_fn
 
     def set_optimizer(self, opt_name='SGD', learning_rate=0.01):
         """

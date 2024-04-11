@@ -5,7 +5,7 @@ test/skip_slow_tests.cfg.txt
 .idea/copilot
 .idea/poetry.xml
 .idea/workspace.xml
-.idea/kkpyutil.iml
+.idea/kkpyai.iml
 .idea/misc.xml
 .idea/inspectionProfiles
 # Byte-compiled / optimized / DLL files
