@@ -117,3 +117,4 @@ def test_classifier_model():
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
     model.train(train_set, test_set, n_epochs=100, verbose=True)
     model.plot_decision_boundary(train_set)
+    model.close_plot()
