@@ -251,6 +251,7 @@ class ClassifierModel(Model):
             # plot predictions
             self.plot.unblock()
             self.plot_decision_boundary(train_set)
+            breakpoint()
             self.plot.plot_learning(losses['train'], losses['test'])
         # final test predictions
         return pred
