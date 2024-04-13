@@ -204,10 +204,6 @@ class Model(Loggable):
 class ClassifierModel(Model):
     def __init__(self, model, loss_fn: typing.Union[str, Model.LossFuncType] = 'BCEWithLogits', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
         super().__init__(model, loss_fn, optm, learning_rate, device_name, logger)
-        self.model = tc.nn.Sequential(
-            tc.nn.Linear(in_features=2, out_features=5),
-            tc.nn.Linear(in_features=5, out_features=1)
-        ).to(self.device)
 
     def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
         tc.manual_seed(seed)
