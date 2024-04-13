@@ -103,9 +103,9 @@ def test_accuracy():
 def test_classifier_model():
     from sklearn.datasets import make_circles
     model = ktc.ClassifierModel(tc.nn.Sequential(
-            tc.nn.Linear(in_features=2, out_features=5),
-            tc.nn.Linear(in_features=5, out_features=1)
-        )
+        tc.nn.Linear(in_features=2, out_features=5),
+        tc.nn.Linear(in_features=5, out_features=1)
+    ))
     # Make 1000 samples
     n_samples = 1000
     # Create circles
