@@ -81,7 +81,7 @@ def test_model():
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
-    model = ktc.Model(model, loss_fn='MSE', optm='SGD', learning_rate=0.01)
+    model = ktc.Regressor(model, loss_fn='MSE', optm='SGD', learning_rate=0.01)
     model.train(train_set, test_set, n_epochs=2000, verbose=True)
     model.evaluate(test_set, verbose=True)
     y_preds = model.predict(test_set)
@@ -96,13 +96,13 @@ def test_model():
 def test_accuracy():
     y_true = tc.tensor([0, 1, 2, 0, 1, 2])
     y_pred = tc.tensor([0, 2, 1, 0, 0, 1])
-    got = ktc.ClassifierModel(nn.Linear(in_features=1, out_features=1)).accuracy(y_true, y_pred)
+    got = ktc.Classifier(nn.Linear(in_features=1, out_features=1)).accuracy(y_true, y_pred)
     assert got == 33.33333333333333
 
 
 def test_classifier_model():
     from sklearn.datasets import make_circles
-    model = ktc.ClassifierModel(tc.nn.Sequential(
+    model = ktc.Classifier(tc.nn.Sequential(
         tc.nn.Linear(in_features=2, out_features=5),
         tc.nn.Linear(in_features=5, out_features=1)
     ))

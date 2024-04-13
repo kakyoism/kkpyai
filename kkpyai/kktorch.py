@@ -86,7 +86,7 @@ def split_dataset(data, labels, train_ratio=0.8, random_seed=42, ):
 # region model
 
 
-class Model(Loggable):
+class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
     def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
@@ -201,8 +201,8 @@ class Model(Loggable):
         return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}{ext}')
 
 
-class ClassifierModel(Model):
-    def __init__(self, model, loss_fn: typing.Union[str, Model.LossFuncType] = 'BCEWithLogits', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
+class Classifier(Regressor):
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCEWithLogits', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
         super().__init__(model, loss_fn, optm, learning_rate, device_name, logger)
 
     def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
