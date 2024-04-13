@@ -315,10 +315,7 @@ class ClassifierModel(Model):
 
         # Reshape preds and plot
         y_pred = y_pred.reshape(xx.shape).detach().numpy()
-        plt.contourf(xx, yy, y_pred, cmap=plt.cm.RdYlBu, alpha=0.7)
-        plt.scatter(X[:, 0], X[:, 1], c=y, s=40, cmap=plt.cm.RdYlBu)
-        plt.xlim(xx.min(), xx.max())
-        plt.ylim(yy.min(), yy.max())
+        self.plot.plot_decision_boundary(dataset, y_pred)
 
 
 # endregion
@@ -356,6 +353,18 @@ class Plot:
         ax.set_xlabel("Epochs")
         ax.legend(prop=self.legendConfig['prop'])
         plt.show(block=self.useBlocking)
+
+    def plot_decision_boundary(self, dataset, predictions):
+        # Setup prediction boundaries and grid
+        epsilon = 0.1
+        x_min, x_max = dataset['data'][:, 0].min() - epsilon, dataset['data'][:, 0].max() + epsilon
+        y_min, y_max = dataset['data'][:, 1].min() - epsilon, dataset['data'][:, 1].max() + epsilon
+        xx, yy = np.meshgrid(np.linspace(x_min, x_max, 101), np.linspace(y_min, y_max, 101))
+        fig, ax = plt.subplots(figsize=(10, 7))
+        ax.contourf(xx, yy, predictions, cmap=plt.cm.RdYlBu, alpha=0.7)
+        ax.scatter(dataset['data'][:, 0], dataset['data'][:, 1], c=dataset['labels'], s=40, cmap=plt.cm.RdYlBu)
+        plt.xlim(xx.min(), xx.max())
+        plt.ylim(yy.min(), yy.max())
 
     def block(self):
         self.useBlocking = True
