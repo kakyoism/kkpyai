@@ -354,15 +354,16 @@ class Plot:
         ax.legend(prop=self.legendConfig['prop'])
         plt.show(block=self.useBlocking)
 
-    def plot_decision_boundary(self, dataset, predictions):
+    def plot_decision_boundary(self, dataset2d, predictions):
         # Setup prediction boundaries and grid
         epsilon = 0.1
-        x_min, x_max = dataset['data'][:, 0].min() - epsilon, dataset['data'][:, 0].max() + epsilon
-        y_min, y_max = dataset['data'][:, 1].min() - epsilon, dataset['data'][:, 1].max() + epsilon
+        x_min, x_max = dataset2d['data'][:, 0].min() - epsilon, dataset2d['data'][:, 0].max() + epsilon
+        y_min, y_max = dataset2d['data'][:, 1].min() - epsilon, dataset2d['data'][:, 1].max() + epsilon
         xx, yy = np.meshgrid(np.linspace(x_min, x_max, 101), np.linspace(y_min, y_max, 101))
         fig, ax = plt.subplots(figsize=(10, 7))
+        # draw colour-coded predictions on meshgrid
         ax.contourf(xx, yy, predictions, cmap=plt.cm.RdYlBu, alpha=0.7)
-        ax.scatter(dataset['data'][:, 0], dataset['data'][:, 1], c=dataset['labels'], s=40, cmap=plt.cm.RdYlBu)
+        ax.scatter(dataset2d['data'][:, 0], dataset2d['data'][:, 1], c=dataset2d['labels'], s=40, cmap=plt.cm.RdYlBu)
         plt.xlim(xx.min(), xx.max())
         plt.ylim(yy.min(), yy.max())
 
