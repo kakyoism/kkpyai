@@ -48,7 +48,7 @@ def test_plot_predictions():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
     with tc.inference_mode():
         y_preds = model(test_set['data'])
     plot = ktc.Plot()
@@ -80,7 +80,7 @@ def test_model():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set, _ = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
     model = ktc.Model(model, loss_fn='MSELoss', optm='SGD', learning_rate=0.01)
     model.train(train_set, test_set, n_epochs=2000, verbose=True)
     model.evaluate(test_set, verbose=True)

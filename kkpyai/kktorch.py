@@ -8,6 +8,7 @@ import kkpyutil as util
 import torch as tc
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 
 # region globals
@@ -69,24 +70,14 @@ class TensorFactory(Loggable):
 
 # region dataset
 
-def split_dataset(data, labels, train_ratio=0.8, validation_ratio=0):
+def split_dataset(data, labels, train_ratio=0.8, random_seed=42,):
     """
     - split dataset into training and testing sets
     """
-    split_train = int(train_ratio * len(data))
-    split_val = int(validation_ratio * len(data))
-    X_train, y_train = data[:split_train], labels[:split_train]
-    X_test, y_test = data[split_train:], labels[split_train:]
-    if validation_ratio:
-        X_val, y_val = X_test[:split_val], y_test[:split_val]
-        X_test, y_test = X_test[split_val:], y_test[split_val:]
-        train_set = {'data': X_train, 'labels': y_train}
-        test_set = {'data': X_test, 'labels': y_test}
-        validation_set = {'data': X_val, 'labels': y_val}
-        return train_set, test_set, validation_set
+    X_train, X_test, y_train, y_test = train_test_split(data, labels, train_size=train_ratio, random_state=random_seed)
     train_set = {'data': X_train, 'labels': y_train}
     test_set = {'data': X_test, 'labels': y_test}
-    return train_set, test_set, validation_ratio
+    return train_set, test_set
 
 # endregion
 
