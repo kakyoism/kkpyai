@@ -28,6 +28,7 @@ class Loggable:
     def __init__(self, logger=None):
         self.logger = logger or util.glogger
 
+
 # endregion
 
 
@@ -70,7 +71,7 @@ class TensorFactory(Loggable):
 
 # region dataset
 
-def split_dataset(data, labels, train_ratio=0.8, random_seed=42,):
+def split_dataset(data, labels, train_ratio=0.8, random_seed=42, ):
     """
     - split dataset into training and testing sets
     """
@@ -79,16 +80,10 @@ def split_dataset(data, labels, train_ratio=0.8, random_seed=42,):
     test_set = {'data': X_test, 'labels': y_test}
     return train_set, test_set
 
+
 # endregion
 
 # region model
-
-
-def compute_classification_accuracy(y_pred, y_true):
-    """
-    - in percentage
-    """
-    return tc.sum(tc.eq(y_pred, y_true)).item() / len(y_true) * 100
 
 
 class Model(Loggable):
@@ -205,6 +200,126 @@ class Model(Loggable):
     def _compose_model_name(model_basename, ext):
         return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}{ext}')
 
+
+class ClassifierModel(Model):
+    def __init__(self, model, loss_fn: typing.Union[str, Model.LossFuncType] = 'BCEWithLogits', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
+        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger)
+        self.model = tc.nn.Sequential(
+            tc.nn.Linear(in_features=2, out_features=5),
+            tc.nn.Linear(in_features=5, out_features=1)
+        ).to(self.device)
+
+    def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
+        tc.manual_seed(seed)
+        X_train = train_set['data'].to(self.device)
+        y_train = train_set['labels'].to(self.device)
+        pred = {'preds': None, 'loss': None}
+        losses = {'train': [], 'test': []}
+        if test_set:
+            X_test = test_set['data'].to(self.device)
+            y_test = test_set['labels'].to(self.device)
+        for epoch in range(n_epochs):
+            # Training
+            # - train mode is on by default after construction
+            self.model.train()
+            # - forward pass
+            # 1. Forward pass (model outputs raw logits)
+            y_logits = self.model(X_train).squeeze()  # squeeze to remove extra `1` dimensions, this won't work unless model and data are on same device
+            y_pred = tc.round(tc.sigmoid(y_logits))  # turn logits -> pred probs -> pred labels
+            # - compute loss
+            loss = self.lossFunction(y_pred, y_train)
+            # loss = self.lossFunction(torch.sigmoid(y_logits), # Using nn.BCELoss you need torch.sigmoid()
+            #                y_train)
+            loss = self.lossFunction(y_logits,  # Using nn.BCEWithLogitsLoss works with raw logits
+                                     y_train)
+            acc = self.accuracy(y_true=y_train, y_pred=y_pred)
+            # - reset grad before backpropagation
+            self.optimizer.zero_grad()
+            # - backpropagation
+            loss.backward()
+            # - update weights and biases
+            self.optimizer.step()
+            if test_set:
+                pred = self.evaluate(test_set)
+                if verbose:
+                    losses['train'].append(loss.cpu().detach().numpy())
+                    losses['test'].append(pred['loss'].cpu().detach().numpy())
+            if verbose and epoch % log_every_n_epochs == 0:
+                msg = f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc} | Test Loss: {pred['loss']} | Test Accuracy: {pred['accuracy']}" if test_set else f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc}"
+                self.logger.info(msg)
+        if verbose:
+            # plot predictions
+            self.plot.unblock()
+            self.plot_decision_boundary(train_set)
+            self.plot.plot_learning(losses['train'], losses['test'])
+        # final test predictions
+        return pred
+
+    def evaluate(self, test_set, verbose=False):
+        """
+        - test_set must contain ground-truth labels
+        """
+        X_test = test_set['data'].to(self.device)
+        y_test = test_set['labels'].to(self.device)
+        # Testing
+        # - eval mode is on by default after construction
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            # 1. Forward pass
+            test_logits = self.model(X_test).squeeze()
+            test_pred = tc.round(tc.sigmoid(test_logits))
+            # 2. Calculate loss/accuracy
+            test_loss = self.lossFunction(test_logits, y_test)
+            test_acc = self.accuracy(y_true=y_test, y_pred=test_pred)
+        if verbose:
+            self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}')
+            self.plot.unblock()
+            self.plot.plot_predictions(None, test_set, test_pred)
+        return {'pred': test_pred, 'loss': test_loss, 'accuracy': test_acc}
+
+    @staticmethod
+    def accuracy(y_pred, y_true):
+        """
+        - in percentage
+        """
+        return tc.sum(tc.eq(y_pred, y_true)).item() / len(y_true) * 100
+
+    def plot_decision_boundary(self, dataset):
+        """
+        - ref: https://github.com/mrdbourke/pytorch-deep-learning/blob/main/helper_functions.py
+        """
+        # Put everything to CPU (works better with NumPy + Matplotlib)
+        self.model.to("cpu")
+        X, y = dataset['data'].to("cpu"), dataset['labels'].to("cpu")
+
+        # Setup prediction boundaries and grid
+        x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
+        y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
+        xx, yy = np.meshgrid(np.linspace(x_min, x_max, 101), np.linspace(y_min, y_max, 101))
+
+        # Make features
+        X_to_pred_on = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
+
+        # Make predictions
+        self.model.eval()
+        with tc.inference_mode():
+            y_logits = self.model(X_to_pred_on)
+
+        # Test for multi-class or binary and adjust logits to prediction labels
+        if len(tc.unique(y)) > 2:
+            y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # multi-class
+        else:
+            y_pred = tc.round(tc.sigmoid(y_logits))  # binary
+
+        # Reshape preds and plot
+        y_pred = y_pred.reshape(xx.shape).detach().numpy()
+        plt.contourf(xx, yy, y_pred, cmap=plt.cm.RdYlBu, alpha=0.7)
+        plt.scatter(X[:, 0], X[:, 1], c=y, s=40, cmap=plt.cm.RdYlBu)
+        plt.xlim(xx.min(), xx.max())
+        plt.ylim(yy.min(), yy.max())
+
+
 # endregion
 
 
@@ -260,6 +375,7 @@ class Plot:
     @staticmethod
     def close():
         plt.close()
+
 
 # endregion
 
