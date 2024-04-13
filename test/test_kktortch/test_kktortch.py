@@ -81,7 +81,7 @@ def test_model():
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
-    model = ktc.Model(model, loss_fn='MSELoss', optm='SGD', learning_rate=0.01)
+    model = ktc.Model(model, loss_fn='MSE', optm='SGD', learning_rate=0.01)
     model.train(train_set, test_set, n_epochs=2000, verbose=True)
     model.evaluate(test_set, verbose=True)
     y_preds = model.predict(test_set)
@@ -92,3 +92,9 @@ def test_model():
     util.safe_remove(mdl)
     model.close_plot()
 
+
+def test_compute_classification_accuracy():
+    y_true = tc.tensor([0, 1, 2, 0, 1, 2])
+    y_pred = tc.tensor([0, 2, 1, 0, 0, 1])
+    got = ktc.compute_classification_accuracy(y_true, y_pred)
+    assert got == 33.33333333333333

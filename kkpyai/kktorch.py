@@ -84,14 +84,21 @@ def split_dataset(data, labels, train_ratio=0.8, random_seed=42,):
 # region model
 
 
+def compute_classification_accuracy(y_pred, y_true):
+    """
+    - in percentage
+    """
+    return tc.sum(tc.eq(y_pred, y_true)).item() / len(y_true) * 100
+
+
 class Model(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
         super().__init__(logger)
         self.device = device_name or find_fast_device()
         self.model = model.to(self.device)
-        self.lossFunction = eval(f'tc.nn.{loss_fn}()') if isinstance(loss_fn, str) else loss_fn
+        self.lossFunction = eval(f'tc.nn.{loss_fn}Loss()') if isinstance(loss_fn, str) else loss_fn
         self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
         self.plot = Plot()
 
