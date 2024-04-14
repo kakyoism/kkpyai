@@ -96,13 +96,13 @@ def test_model():
 def test_accuracy():
     y_true = tc.tensor([0, 1, 2, 0, 1, 2])
     y_pred = tc.tensor([0, 2, 1, 0, 0, 1])
-    got = ktc.Classifier(nn.Linear(in_features=1, out_features=1)).accuracy(y_true, y_pred)
+    got = ktc.BiClassifier(nn.Linear(in_features=1, out_features=1)).accuracy(y_true, y_pred)
     assert got == 33.33333333333333
 
 
 def test_classifier_model():
     from sklearn.datasets import make_circles
-    model = ktc.Classifier(tc.nn.Sequential(
+    model = ktc.BiClassifier(tc.nn.Sequential(
         tc.nn.Linear(in_features=2, out_features=5),
         tc.nn.Linear(in_features=5, out_features=1)
     ))

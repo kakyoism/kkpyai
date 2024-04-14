@@ -10,8 +10,9 @@ python = "^3.11"
 kkpyutil = "*"
 matplotlib = "*"
 scikit-learn = "*"
-torch = "*"
 tensorflow = "*"
+torch = "*"
+torchmetrics = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"
