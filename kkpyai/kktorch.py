@@ -241,7 +241,7 @@ class Classifier(Regressor):
                     losses['train'].append(loss.cpu().detach().numpy())
                     losses['test'].append(pred['loss'].cpu().detach().numpy())
             if verbose and epoch % log_every_n_epochs == 0:
-                msg = f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc} | Test Loss: {pred['loss']} | Test Accuracy: {pred['accuracy']}" if test_set else f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc}"
+                msg = f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc} | Test Loss: {pred['loss']} | Test Accuracy: {pred['accuracy']}%" if test_set else f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {acc}%"
                 self.logger.info(msg)
         if verbose:
             # plot predictions
@@ -269,7 +269,7 @@ class Classifier(Regressor):
             test_loss = self.lossFunction(test_logits, y_test)
             test_acc = self.accuracy(y_true=y_test, y_pred=test_pred)
         if verbose:
-            self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}')
+            self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}%')
             self.plot.unblock()
             self.plot.plot_predictions(None, test_set, test_pred)
         return {'pred': test_pred, 'loss': test_loss, 'accuracy': test_acc}
