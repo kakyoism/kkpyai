@@ -133,22 +133,18 @@ class Regressor(Loggable):
             # Training
             # - train mode is on by default after construction
             self.model.train()
-            y_pred = self.forward_pass(X_train)
-            loss = self.compute_loss(y_pred, y_train, 'train')
-            self.evaluate_epoch(y_pred, y_train, 'train')
+            train_pred, train_loss = self.forward_pass(X_train, y_train, 'train')
             # - reset grad before backpropagation
             self.optimizer.zero_grad()
             # - backpropagation
-            loss.backward()
+            train_loss.backward()
             # - update weights and biases
             self.optimizer.step()
             # testing using validation set
             if test_set:
                 self.model.eval()
                 with tc.inference_mode():
-                    test_pred = self.forward_pass(X_test)
-                    self.compute_loss(test_pred, y_test, 'test')
-                    self.evaluate_epoch(test_pred, y_test, 'test')
+                    test_pred, test_loss = self.forward_pass(X_test, y_test, 'test')
             if verbose:
                 self.log_epoch(epoch)
         # final test predictions
@@ -166,14 +162,13 @@ class Regressor(Loggable):
         self.plot.plot_predictions(train_set, test_set, test_pred)
         self.plot.plot_learning(self.losses['train'], self.losses['test'])
 
-    def forward_pass(self, X):
-        return self.model(X)
-
-    def compute_loss(self, y_pred, y_true, dataset_name='train'):
+    def forward_pass(self, X, y_true, dataset_name='train'):
+        y_pred = self.model(X)
         loss = self.lossFunction(y_pred, y_true)
         # instrumentation
         self.losses[dataset_name].append(loss.cpu().detach().numpy())
-        return loss
+        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        return y_pred, loss
 
     def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
         """
@@ -237,27 +232,24 @@ class BinaryClassifier(Regressor):
         super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
-        self.yTrainLogits = None
         self.performance = {'train': None, 'test': None}
 
-    def forward_pass(self, X):
-        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on the same device
-        self.yTrainLogits = self.model(X).squeeze()
-        # turn logits -> pred probs -> pred labels
-        return self._logits_to_labels(self.yTrainLogits)
-
-    def compute_loss(self, y_pred, y_true, dataset_name='train'):
-
+    def forward_pass(self, X, y_true, dataset_name='train'):
         """
         - BCEWithLogitsLoss is not supported
           - we don't support BCEWithLogitsLoss for consistency
           - so that all loss functions can adopt an explicit activation function
           - and BCEWithLogitsLoss requires no explicit activation because it builds in sigmoid
         """
-        loss = self.lossFunction(self._logits_to_probabilities(), y_true)
+        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on the same device
+        y_logits = self.model(X).squeeze()
+        # turn logits -> pred probs -> pred labels
+        y_pred = self._logits_to_labels(y_logits)
+        loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
         # instrumentation
         self.losses[dataset_name].append(loss.cpu().detach().numpy())
-        return loss
+        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        return y_pred, loss
 
     @staticmethod
     def _logits_to_labels(y_logits):
@@ -266,10 +258,11 @@ class BinaryClassifier(Regressor):
         - raw model output must be activated to get probabilities then labels
         - special activators, e.g., softmax, must override this method
         """
-        return tc.round(tc.sigmoid(y_logits))
+        return tc.round(BinaryClassifier._logits_to_probabilities(y_logits))
 
-    def _logits_to_probabilities(self):
-        return tc.sigmoid(self.yTrainLogits)
+    @staticmethod
+    def _logits_to_probabilities(y_logits):
+        return tc.sigmoid(y_logits)
 
     def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
         """
@@ -349,6 +342,29 @@ class BinaryClassifier(Regressor):
             test_pred = _predict_dataset(test_set)
             self.plot.plot_decision_boundary(test_set, test_pred)
 
+
+class MultiClassifier(BinaryClassifier):
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
+        self.labelCountIsKnown = False
+        # we don't know label count until we see the first batch
+        self.metrics = {'train': None, 'test': None}
+
+    def forward_pass(self, X, y_true, dataset_name='train'):
+        y_logits = self.model(X)
+        if not self.labelCountIsKnown:
+            self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
+            self.labelCountIsKnown = True
+        y_pred = self._logits_to_labels(y_logits)
+        loss = self.lossFunction(y_logits, y_true)
+        # instrumentation
+        self.losses[dataset_name].append(loss.cpu().detach().numpy())
+        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        return y_pred, loss
+
+    @staticmethod
+    def _logits_to_labels(y_logits):
+        return tc.softmax(y_logits, dim=1).argmax(dim=1)
 
 # endregion
 

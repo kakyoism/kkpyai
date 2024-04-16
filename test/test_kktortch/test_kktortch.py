@@ -93,7 +93,7 @@ def test_regressor_model():
     assert regressor.get_performance()['test'] < 0.2
 
 
-def test_classifier_model():
+def test_binaryclassifier_model():
     from sklearn.datasets import make_circles
     classifier = ktc.BinaryClassifier(tc.nn.Sequential(
         tc.nn.Linear(in_features=2, out_features=100),
@@ -110,6 +110,58 @@ def test_classifier_model():
                         random_state=42)  # keep random state so we get the same values
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
+    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
+    classifier.train(train_set, test_set, n_epochs=1000)
+    classifier.plot_predictions(train_set, test_set)
+    classifier.close_plot()
+    assert classifier.performance['test'].item() > 0.9
+
+
+def test_multiclassifier_model():
+    from sklearn.datasets import make_blobs
+    from sklearn.model_selection import train_test_split
+
+    # Set the hyperparameters for data creation
+    NUM_CLASSES = 4
+    NUM_FEATURES = 2
+    RANDOM_SEED = 42
+
+    class BlobModel(nn.Module):
+        def __init__(self, input_features, output_features, hidden_units=8):
+            """Initializes all required hyperparameters for a multi-class classification model.
+
+            Args:
+                input_features (int): Number of input features to the model.
+                out_features (int): Number of output features of the model
+                  (how many classes there are).
+                hidden_units (int): Number of hidden units between layers, default 8.
+            """
+            super().__init__()
+            self.linear_layer_stack = nn.Sequential(
+                nn.Linear(in_features=input_features, out_features=hidden_units),
+                # nn.ReLU(), # <- does our dataset require non-linear layers? (try uncommenting and see if the results change)
+                nn.Linear(in_features=hidden_units, out_features=hidden_units),
+                # nn.ReLU(), # <- does our dataset require non-linear layers? (try uncommenting and see if the results change)
+                nn.Linear(in_features=hidden_units, out_features=output_features),  # how many classes are there?
+            )
+
+        def forward(self, x):
+            return self.linear_layer_stack(x)
+
+    # 1. Create multi-class data
+    X, y = make_blobs(n_samples=1000,
+                      n_features=NUM_FEATURES,  # X features
+                      centers=NUM_CLASSES,  # y labels
+                      cluster_std=1.5,  # give the clusters a little shake up (try changing this to 1.0, the default)
+                      random_state=RANDOM_SEED
+                      )
+    # 2. Turn data into tensors
+    X = tc.from_numpy(X).type(tc.float)
+    y = tc.from_numpy(y).type(tc.LongTensor)
+    model = BlobModel(input_features=NUM_FEATURES,
+                      output_features=NUM_CLASSES,
+                      hidden_units=8)
+    classifier = ktc.MultiClassifier(model, learning_rate=0.1, log_every_n_epochs=100)
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
