@@ -96,11 +96,11 @@ def test_regressor_model():
 def test_classifier_model():
     from sklearn.datasets import make_circles
     classifier = ktc.BinaryClassifier(tc.nn.Sequential(
-        tc.nn.Linear(in_features=2, out_features=10),
+        tc.nn.Linear(in_features=2, out_features=100),
         tc.nn.ReLU(),
-        tc.nn.Linear(in_features=10, out_features=10),
+        tc.nn.Linear(in_features=100, out_features=100),
         tc.nn.ReLU(),
-        tc.nn.Linear(in_features=10, out_features=1),
+        tc.nn.Linear(in_features=100, out_features=1),
     ), learning_rate=0.1, log_every_n_epochs=100)
     # Make 1000 samples
     n_samples = 2000
@@ -114,4 +114,4 @@ def test_classifier_model():
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
     classifier.close_plot()
-    assert classifier.performance['test'].item() > 0.3
+    assert classifier.performance['test'].item() > 0.9
