@@ -81,25 +81,29 @@ def test_regressor_model():
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
-    model = ktc.Regressor(model, loss_fn='MSE', optm='SGD', learning_rate=0.01, log_every_n_epochs=100)
-    model.train(train_set, test_set, n_epochs=2000)
-    y_preds = model.predict(test_set)
+    regressor = ktc.Regressor(model, loss_fn='MSE', optm='SGD', learning_rate=0.01, log_every_n_epochs=100)
+    regressor.train(train_set, test_set, n_epochs=2000)
+    y_preds = regressor.predict(test_set)
     assert tc.allclose(y_preds, test_set['labels'], atol=0.1)
-    model.save('test_model')
+    regressor.save('test_model')
     assert osp.isfile(mdl := osp.join(util.get_platform_tmp_dir(), 'torch', 'test_model.pth'))
-    model.load('test_model')
+    regressor.load('test_model')
     util.safe_remove(mdl)
-    model.close_plot()
+    regressor.close_plot()
+    assert regressor.get_performance()['test'] < 0.2
 
 
 def test_classifier_model():
     from sklearn.datasets import make_circles
-    model = ktc.BiClassifier(tc.nn.Sequential(
-        tc.nn.Linear(in_features=2, out_features=5),
-        tc.nn.Linear(in_features=5, out_features=1)
-    ), log_every_n_epochs=100)
+    classifier = ktc.BinaryClassifier(tc.nn.Sequential(
+        tc.nn.Linear(in_features=2, out_features=10),
+        tc.nn.ReLU(),
+        tc.nn.Linear(in_features=10, out_features=10),
+        tc.nn.ReLU(),
+        tc.nn.Linear(in_features=10, out_features=1),
+    ), learning_rate=0.1, log_every_n_epochs=100)
     # Make 1000 samples
-    n_samples = 1000
+    n_samples = 2000
     # Create circles
     X, y = make_circles(n_samples,
                         noise=0.03,  # a little bit of noise to the dots
@@ -107,6 +111,7 @@ def test_classifier_model():
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
-    model.train(train_set, test_set, n_epochs=100)
-    model.plot_predictions(train_set, test_set)
-    model.close_plot()
+    classifier.train(train_set, test_set, n_epochs=1000)
+    classifier.plot_predictions(train_set, test_set)
+    classifier.close_plot()
+    assert classifier.performance['test'].item() > 0.3

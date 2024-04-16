@@ -126,7 +126,6 @@ class Regressor(Loggable):
             X_test = test_set['data'].to(self.device)
             y_test = test_set['labels'].to(self.device)
         # reset
-        test_pred = {'preds': None, 'loss': None}
         self.losses = {'train': [], 'test': []}
         self.measures = {'train': [], 'test': []}
         verbose = self.logPeriodEpoch > 0
@@ -134,7 +133,7 @@ class Regressor(Loggable):
             # Training
             # - train mode is on by default after construction
             self.model.train()
-            y_pred = self._forward_pass(X_train)
+            y_pred = self.forward_pass(X_train)
             loss = self.compute_loss(y_pred, y_train, 'train')
             self.evaluate_epoch(y_pred, y_train, 'train')
             # - reset grad before backpropagation
@@ -147,13 +146,13 @@ class Regressor(Loggable):
             if test_set:
                 self.model.eval()
                 with tc.inference_mode():
-                    test_pred = self._forward_pass(X_test)
+                    test_pred = self.forward_pass(X_test)
                     self.compute_loss(test_pred, y_test, 'test')
                     self.evaluate_epoch(test_pred, y_test, 'test')
             if verbose:
                 self.log_epoch(epoch)
         # final test predictions
-        self.evaluate_session()
+        self.evaluate()
         if verbose:
             self.plot_model(train_set, test_set, test_pred)
         return test_pred
@@ -167,7 +166,7 @@ class Regressor(Loggable):
         self.plot.plot_predictions(train_set, test_set, test_pred)
         self.plot.plot_learning(self.losses['train'], self.losses['test'])
 
-    def _forward_pass(self, X):
+    def forward_pass(self, X):
         return self.model(X)
 
     def compute_loss(self, y_pred, y_true, dataset_name='train'):
@@ -182,8 +181,14 @@ class Regressor(Loggable):
         """
         pass
 
-    def evaluate_session(self):
+    def evaluate(self):
+        """
+        - latest loss
+        """
         pass
+
+    def get_performance(self):
+        return {'train': self.losses['train'][-1], 'test': self.losses['test'][-1]}
 
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
@@ -227,23 +232,32 @@ class Regressor(Loggable):
         return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}{ext}')
 
 
-class BiClassifier(Regressor):
+class BinaryClassifier(Regressor):
     def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
         super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
+        self.yTrainLogits = None
+        self.performance = {'train': None, 'test': None}
 
-    def _forward_pass(self, X):
-        """
-        - returns logits instead of labels
-          - we don't support BCEWithLogitsLoss for consistency
-          - because activation is a hyperparameter
-          - and all but BCEWithLogitsLoss require explicit activation
-        """
-        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on a same device
-        y_logits = self.model(X).squeeze()
+    def forward_pass(self, X):
+        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on the same device
+        self.yTrainLogits = self.model(X).squeeze()
         # turn logits -> pred probs -> pred labels
-        return self._logits_to_labels(y_logits)
+        return self._logits_to_labels(self.yTrainLogits)
+
+    def compute_loss(self, y_pred, y_true, dataset_name='train'):
+
+        """
+        - BCEWithLogitsLoss is not supported
+          - we don't support BCEWithLogitsLoss for consistency
+          - so that all loss functions can adopt an explicit activation function
+          - and BCEWithLogitsLoss requires no explicit activation because it builds in sigmoid
+        """
+        loss = self.lossFunction(self._logits_to_probabilities(), y_true)
+        # instrumentation
+        self.losses[dataset_name].append(loss.cpu().detach().numpy())
+        return loss
 
     @staticmethod
     def _logits_to_labels(y_logits):
@@ -253,6 +267,9 @@ class BiClassifier(Regressor):
         - special activators, e.g., softmax, must override this method
         """
         return tc.round(tc.sigmoid(y_logits))
+
+    def _logits_to_probabilities(self):
+        return tc.sigmoid(self.yTrainLogits)
 
     def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
         """
@@ -269,11 +286,29 @@ class BiClassifier(Regressor):
             msg += f" | Test Loss: {self.losses['test'][epoch]} | Test Accuracy: {self.measures['test'][epoch]}%"
         self.logger.info(msg)
 
-    def evaluate_session(self):
+    def evaluate(self):
         for dataset_name in ['train', 'test']:
-            acc = self.metrics[dataset_name].compute()
-            self.logger.info(f'{dataset_name.capitalize()} Accuracy: {acc}%')
+            self.performance[dataset_name] = self.metrics[dataset_name].compute()
+            self.logger.info(f'{dataset_name.capitalize()} Accuracy: {self.performance[dataset_name]}%')
             self.metrics[dataset_name].reset()
+
+    def get_performance(self):
+        return self.performance
+
+    def predict(self, test_set, for_plot_only=False):
+        """
+        - test_set can have no labels
+        """
+        dev = 'cpu' if for_plot_only else self.device
+        X_test = test_set['data'].to(dev)
+        # Testing
+        # - eval mode is on by default after construction
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            y_logits = self.model(X_test).squeeze()
+        test_set['labels'] = self._logits_to_labels(y_logits).to(dev)
+        return test_set['labels']
 
     def plot_model(self, train_set, test_set, test_pred):
         self.plot.unblock()
@@ -299,13 +334,12 @@ class BiClassifier(Regressor):
             X_plottable = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
             # Make predictions
             plot_set = {'data': X_plottable, 'labels': tc.zeros(X_plottable.shape[0]).to('cpu')}
-            y_logits = self.predict(plot_set, for_plot_only=True)
+            y_pred = self.predict(plot_set, for_plot_only=True)
             # # Test for multi-class or binary and adjust logits to prediction labels
             # if len(tc.unique(y)) > 2:
             #     y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # multi-class
             # else:
             #     y_pred = tc.round(tc.sigmoid(y_logits))  # binary
-            y_pred = self._logits_to_labels(y_logits)
             # Reshape preds and plot
             return y_pred.reshape(xx.shape).detach().numpy()
         if train_set:
