@@ -5,15 +5,16 @@ import os.path as osp
 import typing
 # 3rd party
 import kkpyutil as util
-import torch as tc
 import matplotlib.pyplot as plt
 import numpy as np
+import torch as tc
+import torchmetrics as tm
 from sklearn.model_selection import train_test_split
 
 
 # region globals
 
-def find_fast_device():
+def probe_fast_device():
     """
     - Apple Silicon uses Apple's own Metal Performance Shaders (MPS) instead of CUDA
     """
@@ -37,12 +38,12 @@ class Loggable:
 class TensorFactory(Loggable):
     def __init__(self, device=None, dtype=tc.float32, requires_grad=False, logger=None):
         super().__init__(logger)
-        self.device = tc.device(device) if device else find_fast_device()
+        self.device = tc.device(device) if device else probe_fast_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
     def init(self, device: str = '', dtype=tc.float32, requires_grad=False):
-        self.device = tc.device(device) if device else find_fast_device()
+        self.device = tc.device(device) if device else probe_fast_device()
         self.dtype = dtype
         self.requires_grad = requires_grad
 
@@ -89,12 +90,15 @@ def split_dataset(data, labels, train_ratio=0.8, random_seed=42, ):
 class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
         super().__init__(logger)
-        self.device = device_name or find_fast_device()
+        self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{loss_fn}Loss()') if isinstance(loss_fn, str) else loss_fn
         self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
+        self.losses = {'train': [], 'test': []}
+        self.measures = {'train': [], 'test': []}
+        self.logPeriodEpoch = log_every_n_epochs
         self.plot = Plot()
 
     def set_lossfunction(self, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss'):
@@ -109,64 +113,84 @@ class Regressor(Loggable):
         """
         self.optimizer = eval(f'tc.optim.{opt_name}(self.model.parameters(), lr={learning_rate})')
 
-    def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
+    def train(self, train_set, test_set=None, n_epochs=1000, seed=42):
+        """
+        - have split train/test sets for easy tracking learning performance side-by-side
+        - both datasets must contain data and labels
+        """
         tc.manual_seed(seed)
         X_train = train_set['data'].to(self.device)
         y_train = train_set['labels'].to(self.device)
-        pred = {'preds': None, 'loss': None}
-        losses = {'train': [], 'test': []}
+        X_test, y_test = None, None
+        if test_set:
+            X_test = test_set['data'].to(self.device)
+            y_test = test_set['labels'].to(self.device)
+        # reset
+        test_pred = {'preds': None, 'loss': None}
+        self.losses = {'train': [], 'test': []}
+        self.measures = {'train': [], 'test': []}
+        verbose = self.logPeriodEpoch > 0
         for epoch in range(n_epochs):
             # Training
             # - train mode is on by default after construction
             self.model.train()
-            # - forward pass
             y_pred = self._forward_pass(X_train)
-            # - compute loss
-            loss = self.lossFunction(y_pred, y_train)
+            loss = self.compute_loss(y_pred, y_train, 'train')
+            self.evaluate_epoch(y_pred, y_train, 'train')
             # - reset grad before backpropagation
             self.optimizer.zero_grad()
             # - backpropagation
             loss.backward()
             # - update weights and biases
             self.optimizer.step()
+            # testing using validation set
             if test_set:
-                pred = self.evaluate(test_set)
-                if verbose:
-                    losses['test'].append(pred['loss'].cpu().detach().numpy())
+                self.model.eval()
+                with tc.inference_mode():
+                    test_pred = self._forward_pass(X_test)
+                    test_loss = self.compute_loss(test_pred, y_test, 'test')
+                    self.evaluate_epoch(test_pred, y_test, 'test')
             if verbose:
-                losses['train'].append(loss.cpu().detach().numpy())
-            if verbose and epoch % log_every_n_epochs == 0:
-                msg = f"Epoch: {epoch} | Train Loss: {loss} | Test Loss: {pred['loss']}" if test_set else f"Epoch: {epoch} | Train Loss: {loss}"
-                self.logger.info(msg)
+                self.log_epoch(epoch)
+        self.evaluate_session()
         if verbose:
-            # plot predictions
-            self.plot.unblock()
-            self.plot.plot_predictions(train_set, test_set, pred['pred'])
-            self.plot.plot_learning(losses['train'], losses['test'])
-        # final test predictions
-        return pred
+            self.plot_model(train_set, test_set, test_pred)
+        return test_pred
+
+    def plot_model(self, train_set, test_set, test_pred):
+        """
+        - prediction quality
+        - learning curves
+        """
+        self.plot.unblock()
+        self.plot.plot_predictions(train_set, test_set, test_pred)
+        self.plot.plot_learning(self.losses['train'], self.losses['test'])
 
     def _forward_pass(self, X):
         return self.model(X)
 
-    def evaluate(self, test_set, verbose=False):
+    def compute_loss(self, y_pred, y_true, dataset_name='train'):
+        loss = self.lossFunction(y_pred, y_true)
+        # instrumentation
+        self.losses[dataset_name].append(loss.cpu().detach().numpy())
+        return loss
+
+    def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
         """
-        - test_set must contain ground-truth labels
+        - for classification only, this method should return accuracy, precision, recall
         """
-        X_test = test_set['data'].to(self.device)
-        y_test = test_set['labels'].to(self.device)
-        # Testing
-        # - eval mode is on by default after construction
-        self.model.eval()
-        # - forward pass
-        with tc.inference_mode():
-            test_pred = self.model(X_test)
-            test_loss = self.lossFunction(test_pred, y_test)
-        if verbose:
-            self.logger.info(f'Test Loss: {test_loss}')
-            self.plot.unblock()
-            self.plot.plot_predictions(None, test_set, test_pred)
-        return {'pred': test_pred, 'loss': test_loss}
+        pass
+
+    def evaluate_session(self):
+        pass
+
+    def log_epoch(self, epoch):
+        if epoch % self.logPeriodEpoch != 0:
+            return
+        msg = f"Epoch: {epoch} | Train Loss: {self.losses['train'][epoch]}"
+        if self.losses['test']:
+            msg += f" | Test Loss: {self.losses['test'][epoch]}"
+        self.logger.info(msg)
 
     def predict(self, test_set, for_plot_only=False):
         """
@@ -203,15 +227,25 @@ class Regressor(Loggable):
 
 
 class BiClassifier(Regressor):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, device_name=None, logger=None):
-        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
+        # TODO: parameterize metric type
+        self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
+        self.measures = {'train': [], 'test': []}
 
     def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
         tc.manual_seed(seed)
         X_train = train_set['data'].to(self.device)
         y_train = train_set['labels'].to(self.device)
+        X_test, y_test = None, None
+        if test_set:
+            X_test = test_set['data'].to(self.device)
+            y_test = test_set['labels'].to(self.device)
+        # reset
         test_pred = {'preds': None, 'loss': None}
-        losses = {'train': [], 'test': [], 'accuracy': []}
+        self.losses = {'train': [], 'test': []}
+        self.measures = {'train': [], 'test': []}
+        verbose = self.logPeriodEpoch > 0
         for epoch in range(n_epochs):
             # Training
             # - train mode is on by default after construction
@@ -221,8 +255,8 @@ class BiClassifier(Regressor):
             #   - we don't support BCEWithLogitsLoss for consistency
             #   - because activation is a hyperparameter
             #   - and all but BCEWithLogitsLoss require explicit activation
-            loss = self.lossFunction(y_pred, y_train)
-            acc = self.accuracy(y_true=y_train, y_pred=y_pred)
+            loss = self.compute_loss(y_pred, y_train, 'train')
+            self.evaluate_epoch(y_pred, y_train, 'train')
             # - reset grad before backpropagation
             self.optimizer.zero_grad()
             # - backpropagation
@@ -230,26 +264,25 @@ class BiClassifier(Regressor):
             # - update weights and biases
             self.optimizer.step()
             if test_set:
-                test_pred = self.evaluate(test_set)
-                if verbose:
-                    losses['test'].append(test_pred['loss'].cpu().detach().numpy())
+                self.model.eval()
+                with tc.inference_mode():
+                    test_pred = self._forward_pass(X_test)
+                    self.compute_loss(test_pred, y_test, 'test')
+                    self.evaluate_epoch(test_pred, y_test, 'test')
             if verbose:
-                losses['train'].append(loss.cpu().detach().numpy())
-                acc = self.accuracy(y_true=y_train, y_pred=y_pred)
-                losses['accuracy'].append(acc)
-            if verbose and epoch % log_every_n_epochs == 0:
-                msg = f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {losses['accuracy']} | Test Loss: {test_pred['loss']} | Test Accuracy: {test_pred['accuracy']}%" if test_set else f"Epoch: {epoch} | Train Loss: {loss} | Train Accuracy: {losses['accuracy']}%"
-                self.logger.info(msg)
+                self.log_epoch(epoch)
+        self.evaluate_session()
         if verbose:
-            # plot predictions
-            self.plot.unblock()
-            self.plot_decision_boundary(train_set)
-            self.plot.plot_learning(losses['train'], losses['test'])
+            self.plot_model(train_set, test_set, test_pred)
+            # # plot model performance
+            # self.plot.unblock()
+            # self.plot_predictions(train_set)
+            # self.plot.plot_learning(losses['train'], losses['test'])
         # final test predictions
         return test_pred
 
     def _forward_pass(self, X):
-        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on same device
+        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on a same device
         y_logits = self.model(X).squeeze()
         # turn logits -> pred probs -> pred labels
         return self._logits_to_labels(y_logits)
@@ -263,63 +296,72 @@ class BiClassifier(Regressor):
         """
         return tc.round(tc.sigmoid(y_logits))
 
-    def evaluate(self, test_set, verbose=False):
+    def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
         """
-        - test_set must contain ground-truth labels
+        - for classification only, this method should return accuracy, precision, recall
         """
-        X_test = test_set['data'].to(self.device)
-        y_test = test_set['labels'].to(self.device)
-        # Testing
-        # - eval mode is on by default after construction
-        self.model.eval()
-        with tc.inference_mode():
-            # 1. Forward pass
-            test_logits = self.model(X_test).squeeze()
-            test_pred = tc.round(tc.sigmoid(test_logits))
-            # 2. Calculate loss/accuracy
-            test_loss = self.lossFunction(test_logits, y_test)
-            test_acc = self.accuracy(y_true=y_test, y_pred=test_pred)
-        if verbose:
-            self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}%')
-            self.plot.unblock()
-            self.plot.plot_predictions(None, test_set, test_pred)
-        return {'pred': test_pred, 'loss': test_loss, 'accuracy': test_acc}
+        meas = self.metrics[dataset_name](y_pred, y_true)
+        self.measures[dataset_name].append(meas)
+        # pass
+        # if verbose:
+        #     self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}%')
+        #     self.plot.unblock()
+        #     self.plot.plot_predictions(None, test_set, test_pred)
+        # return {'pred': test_pred, 'loss': test_loss, 'accuracy': test_acc}
 
-    @staticmethod
-    def accuracy(y_pred, y_true):
-        """
-        - in percentage
-        """
-        return tc.sum(tc.eq(y_pred, y_true)).item() / len(y_true) * 100
+    def log_epoch(self, epoch):
+        if epoch % self.logPeriodEpoch != 0:
+            return
+        msg = f"Epoch: {epoch} | Train Loss: {self.losses['train'][epoch]} | Train Accuracy: {self.measures['train'][epoch]}%"
+        if self.losses['test']:
+            msg += f" | Test Loss: {self.losses['test'][epoch]} | Test Accuracy: {self.measures['test'][epoch]}%"
+        self.logger.info(msg)
 
-    def plot_decision_boundary(self, dataset):
+    def evaluate_session(self):
+        for dataset_name in ['train', 'test']:
+            acc = self.metrics[dataset_name].compute()
+            self.logger.info(f'{dataset_name.capitalize()} Accuracy: {acc}%')
+            self.metrics[dataset_name].reset()
+
+    def plot_model(self, train_set, test_set, test_pred):
+        self.plot.unblock()
+        self.plot_predictions(train_set, test_set, test_pred)
+        self.plot.plot_learning(self.losses['train'], self.losses['test'])
+
+    def plot_predictions(self, train_set, test_set, predictions=None):
         """
-        - assume 2D dataset
+        - assume 2D dataset, plot decision boundaries
         - create special dataset and run model on it for visualization (2D)
         - ref: https://github.com/mrdbourke/pytorch-deep-learning/blob/main/helper_functions.py
         """
-        # Put everything to CPU (works better with NumPy + Matplotlib)
-        self.model.to("cpu")
-        X, y = dataset['data'].to("cpu"), dataset['labels'].to("cpu")
-        # Setup prediction boundaries and grid
-        x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
-        y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
-        n_data = 100
-        xx, yy = np.meshgrid(np.linspace(x_min, x_max, n_data+1), np.linspace(y_min, y_max, n_data+1))
-        # Make features
-        X_plottable = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
-        # Make predictions
-        plot_set = {'data': X_plottable, 'labels': tc.zeros(X_plottable.shape[0]).to('cpu')}
-        y_logits = self.predict(plot_set, for_plot_only=True)
-        # # Test for multi-class or binary and adjust logits to prediction labels
-        # if len(tc.unique(y)) > 2:
-        #     y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # multi-class
-        # else:
-        #     y_pred = tc.round(tc.sigmoid(y_logits))  # binary
-        y_pred = self._logits_to_labels(y_logits)
-        # Reshape preds and plot
-        y_pred = y_pred.reshape(xx.shape).detach().numpy()
-        self.plot.plot_decision_boundary(dataset, y_pred)
+        def _predict_dataset(dataset):
+            # Put everything to CPU (works better with NumPy + Matplotlib)
+            self.model.to("cpu")
+            X, y = dataset['data'].to("cpu"), dataset['labels'].to("cpu")
+            # Setup prediction boundaries and grid
+            x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
+            y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
+            n_data = 100
+            xx, yy = np.meshgrid(np.linspace(x_min, x_max, n_data+1), np.linspace(y_min, y_max, n_data+1))
+            # Make features
+            X_plottable = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
+            # Make predictions
+            plot_set = {'data': X_plottable, 'labels': tc.zeros(X_plottable.shape[0]).to('cpu')}
+            y_logits = self.predict(plot_set, for_plot_only=True)
+            # # Test for multi-class or binary and adjust logits to prediction labels
+            # if len(tc.unique(y)) > 2:
+            #     y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # multi-class
+            # else:
+            #     y_pred = tc.round(tc.sigmoid(y_logits))  # binary
+            y_pred = self._logits_to_labels(y_logits)
+            # Reshape preds and plot
+            return y_pred.reshape(xx.shape).detach().numpy()
+        if train_set:
+            train_pred = _predict_dataset(train_set)
+            self.plot.plot_decision_boundary(train_set, train_pred)
+        if test_set:
+            test_pred = _predict_dataset(test_set)
+            self.plot.plot_decision_boundary(test_set, test_pred)
 
 
 # endregion
