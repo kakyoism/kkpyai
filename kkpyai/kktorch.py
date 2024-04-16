@@ -148,10 +148,11 @@ class Regressor(Loggable):
                 self.model.eval()
                 with tc.inference_mode():
                     test_pred = self._forward_pass(X_test)
-                    test_loss = self.compute_loss(test_pred, y_test, 'test')
+                    self.compute_loss(test_pred, y_test, 'test')
                     self.evaluate_epoch(test_pred, y_test, 'test')
             if verbose:
                 self.log_epoch(epoch)
+        # final test predictions
         self.evaluate_session()
         if verbose:
             self.plot_model(train_set, test_set, test_pred)
@@ -231,57 +232,14 @@ class BiClassifier(Regressor):
         super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
-        self.measures = {'train': [], 'test': []}
-
-    def train(self, train_set, test_set=None, n_epochs=1000, seed=42, verbose=False, log_every_n_epochs=100):
-        tc.manual_seed(seed)
-        X_train = train_set['data'].to(self.device)
-        y_train = train_set['labels'].to(self.device)
-        X_test, y_test = None, None
-        if test_set:
-            X_test = test_set['data'].to(self.device)
-            y_test = test_set['labels'].to(self.device)
-        # reset
-        test_pred = {'preds': None, 'loss': None}
-        self.losses = {'train': [], 'test': []}
-        self.measures = {'train': [], 'test': []}
-        verbose = self.logPeriodEpoch > 0
-        for epoch in range(n_epochs):
-            # Training
-            # - train mode is on by default after construction
-            self.model.train()
-            y_pred = self._forward_pass(X_train)
-            # - compute loss
-            #   - we don't support BCEWithLogitsLoss for consistency
-            #   - because activation is a hyperparameter
-            #   - and all but BCEWithLogitsLoss require explicit activation
-            loss = self.compute_loss(y_pred, y_train, 'train')
-            self.evaluate_epoch(y_pred, y_train, 'train')
-            # - reset grad before backpropagation
-            self.optimizer.zero_grad()
-            # - backpropagation
-            loss.backward()
-            # - update weights and biases
-            self.optimizer.step()
-            if test_set:
-                self.model.eval()
-                with tc.inference_mode():
-                    test_pred = self._forward_pass(X_test)
-                    self.compute_loss(test_pred, y_test, 'test')
-                    self.evaluate_epoch(test_pred, y_test, 'test')
-            if verbose:
-                self.log_epoch(epoch)
-        self.evaluate_session()
-        if verbose:
-            self.plot_model(train_set, test_set, test_pred)
-            # # plot model performance
-            # self.plot.unblock()
-            # self.plot_predictions(train_set)
-            # self.plot.plot_learning(losses['train'], losses['test'])
-        # final test predictions
-        return test_pred
 
     def _forward_pass(self, X):
+        """
+        - returns logits instead of labels
+          - we don't support BCEWithLogitsLoss for consistency
+          - because activation is a hyperparameter
+          - and all but BCEWithLogitsLoss require explicit activation
+        """
         # squeeze to remove extra `1` dimensions, this won't work unless model and data are on a same device
         y_logits = self.model(X).squeeze()
         # turn logits -> pred probs -> pred labels
@@ -302,12 +260,6 @@ class BiClassifier(Regressor):
         """
         meas = self.metrics[dataset_name](y_pred, y_true)
         self.measures[dataset_name].append(meas)
-        # pass
-        # if verbose:
-        #     self.logger.info(f'Test Loss: {test_loss} | Test Accuracy: {test_acc}%')
-        #     self.plot.unblock()
-        #     self.plot.plot_predictions(None, test_set, test_pred)
-        # return {'pred': test_pred, 'loss': test_loss, 'accuracy': test_acc}
 
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:

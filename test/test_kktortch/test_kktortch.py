@@ -107,6 +107,6 @@ def test_classifier_model():
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
     train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
-    model.train(train_set, test_set, n_epochs=100, verbose=True)
+    model.train(train_set, test_set, n_epochs=100)
     model.plot_predictions(train_set, test_set)
     model.close_plot()
