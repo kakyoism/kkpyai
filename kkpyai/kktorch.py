@@ -108,16 +108,6 @@ class DataProxy(tcd.Dataset):
         X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
         return DataProxy(X_train, y_train), DataProxy(X_test, y_test)
 
-
-def split_dataset(data, labels, train_ratio=0.8, random_seed=42):
-    """
-    - split dataset into training and testing sets
-    """
-    X_train, X_test, y_train, y_test = train_test_split(data, labels, train_size=train_ratio, random_state=random_seed)
-    train_set = {'data': X_train, 'labels': y_train}
-    test_set = {'data': X_test, 'labels': y_test}
-    return train_set, test_set
-
 # endregion
 
 # region model
@@ -151,6 +141,7 @@ class Regressor(Loggable):
 
     def train(self, train_set: DataProxy, test_set: DataProxy = None, n_epochs=1000, seed=42):
         """
+        - must call DataProxy(data, labels) or DataProxy(dataset: tc.Dataset) to create datasets first
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
