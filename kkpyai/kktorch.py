@@ -11,6 +11,7 @@ import torch as tc
 import torch.utils.data as tcd
 import torchmetrics as tm
 from sklearn.model_selection import train_test_split
+from tqdm.auto import tqdm
 
 
 # region globals
@@ -156,7 +157,7 @@ class Regressor(Loggable):
         self.losses = {'train': [], 'test': []}
         self.measures = {'train': [], 'test': []}
         verbose = self.logPeriodEpoch > 0
-        for epoch in range(n_epochs):
+        for epoch in tqdm(range(n_epochs)):
             # Training
             # - train mode is on by default after construction
             self.model.train()
