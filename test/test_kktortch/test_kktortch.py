@@ -48,9 +48,9 @@ def test_plot_predictions():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     with tc.inference_mode():
-        y_preds = model(test_set['data'])
+        y_preds = model(test_set.data)
     plot = ktc.Plot()
     plot.unblock()
     plot.plot_predictions(train_set, test_set, y_preds)
@@ -80,11 +80,11 @@ def test_regressor_model():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     regressor = ktc.Regressor(model, loss_fn='MSE', optm='SGD', learning_rate=0.01, log_every_n_epochs=100)
     regressor.train(train_set, test_set, n_epochs=2000)
     y_preds = regressor.predict(test_set)
-    assert tc.allclose(y_preds, test_set['labels'], atol=0.1)
+    assert tc.allclose(y_preds, test_set.targets, atol=0.1)
     regressor.save('test_model')
     assert osp.isfile(mdl := osp.join(util.get_platform_tmp_dir(), 'torch', 'test_model.pth'))
     regressor.load('test_model')
@@ -110,7 +110,7 @@ def test_binaryclassifier_model():
                         random_state=42)  # keep random state so we get the same values
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
-    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
     classifier.close_plot()
@@ -162,8 +162,76 @@ def test_multiclassifier_model():
                       output_features=NUM_CLASSES,
                       hidden_units=8)
     classifier = ktc.MultiClassifier(model, learning_rate=0.1, log_every_n_epochs=100)
-    train_set, test_set = ktc.split_dataset(X, y, train_ratio=0.8)
+    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
     classifier.close_plot()
     assert classifier.performance['test'].item() > 0.9
+
+
+def test_image_classification():
+    import torchvision as tcv
+    from torchvision import datasets
+    from torchvision.transforms import ToTensor
+    from torch.utils.data import DataLoader
+    # Import matplotlib for visualization
+    import matplotlib.pyplot as plt
+    # Check versions
+    # Note: your PyTorch version shouldn't be lower than 1.10.0 and torchvision version shouldn't be lower than 0.11
+    print(f"PyTorch version: {tc.__version__}\ntorchvision version: {tcv.__version__}")
+    # Setup training data
+    train_data = datasets.FashionMNIST(
+        root=osp.join(_gen_dir, 'data'),  # where to download data to?
+        train=True,  # get training data
+        download=True,  # download data if it doesn't exist on disk
+        transform=ToTensor(),  # images come as PIL format, we want to turn into Torch tensors
+        target_transform=None  # you can transform labels as well
+    )
+    # Setup testing data
+    test_data = datasets.FashionMNIST(
+        root=osp.join(_gen_dir, 'data'),
+        train=False,  # get test data
+        download=True,
+        transform=ToTensor()
+    )
+    # See first training sample
+    image, label = train_data[0]
+    # data shape?
+    print(image, label, image.shape)
+    # How many samples are there?
+    print(len(train_data.data), len(train_data.targets), len(test_data.data), len(test_data.targets))
+    # See classes
+    class_names = train_data.classes
+    print(class_names)
+    # visualize
+    plt.imshow(image.squeeze())  # image shape is [1, 28, 28] (colour channels, height, width)
+    plt.title(label)
+    plt.imshow(image.squeeze(), cmap="gray")
+    plt.title(class_names[label])
+    # Plot more images: random selection
+    tc.manual_seed(42)
+    fig = plt.figure(figsize=(9, 9))
+    rows, cols = 4, 4
+    for i in range(1, rows * cols + 1):
+        random_idx = tc.randint(0, len(train_data), size=[1]).item()
+        img, label = train_data[random_idx]
+        fig.add_subplot(rows, cols, i)
+        plt.imshow(img.squeeze(), cmap="gray")
+        plt.title(class_names[label])
+        plt.axis(False)
+    # Set up the batch size hyperparameter
+    BATCH_SIZE = 32
+    # Turn datasets into iterables (batches)
+    train_dataloader = DataLoader(train_data,  # dataset to turn into iterable
+                                  batch_size=BATCH_SIZE,  # how many samples per batch?
+                                  shuffle=True  # shuffle data every epoch?
+                                  )
+
+    test_dataloader = DataLoader(test_data,
+                                 batch_size=BATCH_SIZE,
+                                 shuffle=False  # don't necessarily have to shuffle the testing data
+                                 )
+    # Let's check out what we've created
+    print(f"Dataloaders: {train_dataloader, test_dataloader}")
+    print(f"Length of train dataloader: {len(train_dataloader)} batches of {BATCH_SIZE}")
+    print(f"Length of test dataloader: {len(test_dataloader)} batches of {BATCH_SIZE}")

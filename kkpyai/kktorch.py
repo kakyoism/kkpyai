@@ -8,6 +8,7 @@ import kkpyutil as util
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as tc
+import torch.utils.data as tcd
 import torchmetrics as tm
 from sklearn.model_selection import train_test_split
 
@@ -72,7 +73,43 @@ class TensorFactory(Loggable):
 
 # region dataset
 
-def split_dataset(data, labels, train_ratio=0.8, random_seed=42, ):
+class DataProxy(tcd.Dataset):
+    def __init__(self, data, targets=None, data_type=tc.float32, target_type=tc.float32):
+        """
+        - Initializes the dataset.
+        :param data: The features (can be a tensor, another dataset, or custom data).
+        :param targets: The targets/labels (for supervised learning).
+        If `data` is a dataset, `targets` will be ignored.
+        """
+        self.data = data
+        self.targets = targets
+        # Check if the data is already a PyTorch dataset
+        self.isTorchDataset = isinstance(data, tcd.Dataset)
+        if not self.isTorchDataset:
+            # Ensure data (numpy?) is a tensor for consistency
+            if not isinstance(data, tc.Tensor):
+                self.data = tc.tensor(data, dtype=data_type)
+            if targets is not None and not isinstance(targets, tc.Tensor):
+                self.targets = tc.tensor(targets, dtype=target_type)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        if self.isTorchDataset:
+            return self.data[idx]
+        item = self.data[idx]
+        if self.targets is not None:
+            target = self.targets[idx]
+            return item, target
+        return item
+
+    def split_train_test(self, train_ratio=0.8, random_seed=42):
+        X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
+        return DataProxy(X_train, y_train), DataProxy(X_test, y_test)
+
+
+def split_dataset(data, labels, train_ratio=0.8, random_seed=42):
     """
     - split dataset into training and testing sets
     """
@@ -80,7 +117,6 @@ def split_dataset(data, labels, train_ratio=0.8, random_seed=42, ):
     train_set = {'data': X_train, 'labels': y_train}
     test_set = {'data': X_test, 'labels': y_test}
     return train_set, test_set
-
 
 # endregion
 
@@ -113,18 +149,18 @@ class Regressor(Loggable):
         """
         self.optimizer = eval(f'tc.optim.{opt_name}(self.model.parameters(), lr={learning_rate})')
 
-    def train(self, train_set, test_set=None, n_epochs=1000, seed=42):
+    def train(self, train_set: DataProxy, test_set: DataProxy = None, n_epochs=1000, seed=42):
         """
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
         tc.manual_seed(seed)
-        X_train = train_set['data'].to(self.device)
-        y_train = train_set['labels'].to(self.device)
+        X_train = train_set.data.to(self.device)
+        y_train = train_set.targets.to(self.device)
         X_test, y_test = None, None
         if test_set:
-            X_test = test_set['data'].to(self.device)
-            y_test = test_set['labels'].to(self.device)
+            X_test = test_set.data.to(self.device)
+            y_test = test_set.targets.to(self.device)
         # reset
         self.losses = {'train': [], 'test': []}
         self.measures = {'train': [], 'test': []}
@@ -198,15 +234,15 @@ class Regressor(Loggable):
         - test_set can have no labels
         """
         dev = 'cpu' if for_plot_only else self.device
-        X_test = test_set['data'].to(dev)
+        X_test = test_set.data.to(dev)
         # Testing
         # - eval mode is on by default after construction
         self.model.eval()
         # - forward pass
         with tc.inference_mode():
             y_pred = self.model(X_test)
-        test_set['labels'] = y_pred.to(dev)
-        return test_set['labels']
+        test_set.targets = y_pred.to(dev)
+        return test_set.targets
 
     def close_plot(self):
         self.plot.close()
@@ -293,15 +329,15 @@ class BinaryClassifier(Regressor):
         - test_set can have no labels
         """
         dev = 'cpu' if for_plot_only else self.device
-        X_test = test_set['data'].to(dev)
+        X_test = test_set.data.to(dev)
         # Testing
         # - eval mode is on by default after construction
         self.model.eval()
         # - forward pass
         with tc.inference_mode():
             y_logits = self.model(X_test).squeeze()
-        test_set['labels'] = self._logits_to_labels(y_logits).to(dev)
-        return test_set['labels']
+        test_set.targets = self._logits_to_labels(y_logits).to(dev)
+        return test_set.targets
 
     def plot_model(self, train_set, test_set, test_pred):
         self.plot.unblock()
@@ -317,7 +353,7 @@ class BinaryClassifier(Regressor):
         def _predict_dataset(dataset):
             # Put everything to CPU (works better with NumPy + Matplotlib)
             self.model.to("cpu")
-            X, y = dataset['data'].to("cpu"), dataset['labels'].to("cpu")
+            X, y = dataset.data.to("cpu"), dataset.targets.to("cpu")
             # Setup prediction boundaries and grid
             x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
             y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
@@ -326,7 +362,7 @@ class BinaryClassifier(Regressor):
             # Make features
             X_plottable = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
             # Make predictions
-            plot_set = {'data': X_plottable, 'labels': tc.zeros(X_plottable.shape[0]).to('cpu')}
+            plot_set = DataProxy(X_plottable, tc.zeros(X_plottable.shape[0]).to('cpu'))
             y_pred = self.predict(plot_set, for_plot_only=True)
             # # Test for multi-class or binary and adjust logits to prediction labels
             # if len(tc.unique(y)) > 2:
@@ -366,6 +402,17 @@ class MultiClassifier(BinaryClassifier):
     def _logits_to_labels(y_logits):
         return tc.softmax(y_logits, dim=1).argmax(dim=1)
 
+
+class BatchClassifier(MultiClassifier):
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
+        self.batchSize = batch_size
+        self.shuffleBatch = shuffle
+
+    def main(self):
+        pass
+
+
 # endregion
 
 
@@ -382,11 +429,11 @@ class Plot:
         """
         fig, ax = plt.subplots(figsize=(10, 7))
         if train_set:
-            ax.scatter(train_set['data'].cpu(), train_set['labels'].cpu(), s=4, color='blue', label='Training Data')
+            ax.scatter(train_set.data.cpu(), train_set.targets.cpu(), s=4, color='blue', label='Training Data')
         if test_set:
-            ax.scatter(test_set['data'].cpu(), test_set['labels'].cpu(), s=4, color='green', label='Testing Data')
+            ax.scatter(test_set.data.cpu(), test_set.targets.cpu(), s=4, color='green', label='Testing Data')
         if predictions is not None:
-            ax.scatter(test_set['data'].cpu(), predictions.cpu(), s=4, color='red', label='Predictions')
+            ax.scatter(test_set.data.cpu(), predictions.cpu(), s=4, color='red', label='Predictions')
         ax.legend(prop=self.legendConfig['prop'])
         plt.show(block=self.useBlocking)
 
@@ -405,13 +452,13 @@ class Plot:
     def plot_decision_boundary(self, dataset2d, predictions):
         # Setup prediction boundaries and grid
         epsilon = 0.1
-        x_min, x_max = dataset2d['data'][:, 0].min() - epsilon, dataset2d['data'][:, 0].max() + epsilon
-        y_min, y_max = dataset2d['data'][:, 1].min() - epsilon, dataset2d['data'][:, 1].max() + epsilon
+        x_min, x_max = dataset2d.data[:, 0].min() - epsilon, dataset2d.data[:, 0].max() + epsilon
+        y_min, y_max = dataset2d.data[:, 1].min() - epsilon, dataset2d.data[:, 1].max() + epsilon
         xx, yy = np.meshgrid(np.linspace(x_min, x_max, 101), np.linspace(y_min, y_max, 101))
         fig, ax = plt.subplots(figsize=(10, 7))
         # draw colour-coded predictions on meshgrid
         ax.contourf(xx, yy, predictions, cmap=plt.cm.RdYlBu, alpha=0.7)
-        ax.scatter(dataset2d['data'][:, 0], dataset2d['data'][:, 1], c=dataset2d['labels'], s=40, cmap=plt.cm.RdYlBu)
+        ax.scatter(dataset2d.data[:, 0], dataset2d.data[:, 1], c=dataset2d.targets, s=40, cmap=plt.cm.RdYlBu)
         plt.xlim(xx.min(), xx.max())
         plt.ylim(yy.min(), yy.max())
 
