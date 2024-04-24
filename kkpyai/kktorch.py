@@ -7,6 +7,7 @@ import typing
 import kkpyutil as util
 import matplotlib.pyplot as plt
 import numpy as np
+from timeit import default_timer as perf_timer
 import torch as tc
 import torch.utils.data as tud
 import torchmetrics as tm
@@ -163,6 +164,7 @@ class Regressor(Loggable):
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
+        start_time = perf_timer()
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
         train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch)
@@ -202,8 +204,9 @@ class Regressor(Loggable):
                     self.evaluate_epoch(test_dl, 'test')
             if verbose:
                 self.log_epoch(epoch)
+        stop_time = perf_timer()
         # final test predictions
-        self.evaluate()
+        self.evaluate(start_time, stop_time)
         if verbose:
             self.plot_model(train_set, test_set, test_pred)
         return test_pred
@@ -240,11 +243,12 @@ class Regressor(Loggable):
         """
         pass
 
-    def evaluate(self):
+    def evaluate(self, start_time, stop_time):
         """
-        - latest loss
+        - training time
+        - loss and metric
         """
-        pass
+        self.logger.info(f'Training time on device {self.device}: {stop_time - start_time:.3f}s')
 
     def get_performance(self):
         return {'train': self.epochLosses['train']['epoch'][-1], 'test': self.epochLosses['test']['epoch'][-1]}
@@ -343,7 +347,8 @@ class BinaryClassifier(Regressor):
             msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]} | Test Accuracy: {self.epochMetrics['test']['epoch'][epoch]}%"
         self.logger.info(msg)
 
-    def evaluate(self):
+    def evaluate(self, start_time, stop_time):
+        super().evaluate(start_time, stop_time)
         for dataset_name in ['train', 'test']:
             self.performance[dataset_name] = self.metrics[dataset_name].compute()
             self.logger.info(f'{dataset_name.capitalize()} Accuracy: {self.performance[dataset_name]}%')
