@@ -8,7 +8,7 @@ import kkpyutil as util
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as tc
-import torch.utils.data as tcd
+import torch.utils.data as tud
 import torchmetrics as tm
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
@@ -74,18 +74,20 @@ class TensorFactory(Loggable):
 
 # region dataset
 
-class DataProxy(tcd.Dataset):
+class DataProxy(tud.Dataset):
     def __init__(self, data, targets=None, data_type=tc.float32, target_type=tc.float32):
         """
-        - Initializes the dataset.
-        :param data: The features (can be a tensor, another dataset, or custom data).
-        :param targets: The targets/labels (for supervised learning).
-        If `data` is a dataset, `targets` will be ignored.
+        - initializes the dataset.
+        - train and test sets must each use a separate instance of this class
+        - if data is a dataset, targets will be ignored
+        - tc.Dataset offers train/test sets separately, so no split is needed
+        - when targets are not provided, the dataset must be a tc.Dataset
+        - split_train_test() only works for loose data, e.g., tensors or numpy arrays
         """
         self.data = data
         self.targets = targets
         # Check if the data is already a PyTorch dataset
-        self.isTorchDataset = isinstance(data, tcd.Dataset)
+        self.isTorchDataset = isinstance(data, tud.Dataset)
         if not self.isTorchDataset:
             # Ensure data (numpy?) is a tensor for consistency
             if not isinstance(data, tc.Tensor):
@@ -109,6 +111,10 @@ class DataProxy(tcd.Dataset):
         X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
         return DataProxy(X_train, y_train), DataProxy(X_test, y_test)
 
+    @staticmethod
+    def use_device(X, y, device):
+        return X.to(device), y.to(device)
+
 # endregion
 
 # region model
@@ -117,16 +123,27 @@ class DataProxy(tcd.Dataset):
 class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
         super().__init__(logger)
         self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{loss_fn}Loss()') if isinstance(loss_fn, str) else loss_fn
         self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
-        self.losses = {'train': [], 'test': []}
-        self.measures = {'train': [], 'test': []}
+        self.batchSize = batch_size
+        self.shuffleBatchEveryEpoch = shuffle
         self.logPeriodEpoch = log_every_n_epochs
+        # imp
+        self.epochLosses = self.init_epoch_metric()
+        self.epochMetrics = self.init_epoch_metric()
         self.plot = Plot()
+
+    @staticmethod
+    def init_epoch_metric():
+        return {'train': {'_batch': [], 'epoch': []}, 'test': {'_batch': [], 'epoch': []}}
+
+    def reset_batch_metrics(self, dataset_name='train'):
+        self.epochLosses[dataset_name]['_batch'] = []
+        self.epochMetrics[dataset_name]['_batch'] = []
 
     def set_lossfunction(self, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss'):
         """
@@ -147,32 +164,42 @@ class Regressor(Loggable):
         - both datasets must contain data and labels
         """
         tc.manual_seed(seed)
-        X_train = train_set.data.to(self.device)
-        y_train = train_set.targets.to(self.device)
-        X_test, y_test = None, None
+        # Turn datasets into iterables (batches)
+        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch)
+        test_dl = None
         if test_set:
-            X_test = test_set.data.to(self.device)
-            y_test = test_set.targets.to(self.device)
+            # no need to shuffle test data
+            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
         # reset
-        self.losses = {'train': [], 'test': []}
-        self.measures = {'train': [], 'test': []}
+        self.epochLosses = self.init_epoch_metric()
+        self.epochMetrics = self.init_epoch_metric()
         verbose = self.logPeriodEpoch > 0
         for epoch in tqdm(range(n_epochs)):
             # Training
             # - train mode is on by default after construction
-            self.model.train()
-            train_pred, train_loss = self.forward_pass(X_train, y_train, 'train')
-            # - reset grad before backpropagation
-            self.optimizer.zero_grad()
-            # - backpropagation
-            train_loss.backward()
-            # - update weights and biases
-            self.optimizer.step()
-            # testing using validation set
+            self.reset_batch_metrics('train')
+            for batch, (X_train, y_train) in enumerate(train_dl):
+                X_train, y_train = DataProxy.use_device(X_train, y_train, self.device)
+                self.model.train()
+                train_pred, train_loss = self.forward_pass(X_train, y_train, 'train')
+                # - reset grad before backpropagation
+                self.optimizer.zero_grad()
+                # - backpropagation
+                train_loss.backward()
+                # - update weights and biases
+                self.optimizer.step()
+            self.compute_epoch_loss(train_dl, 'train')
+            self.evaluate_epoch(train_dl, 'train')
+            # testing using a validation set
             if test_set:
                 self.model.eval()
                 with tc.inference_mode():
-                    test_pred, test_loss = self.forward_pass(X_test, y_test, 'test')
+                    self.reset_batch_metrics('test')
+                    for X_test, y_test in test_dl:
+                        X_test, y_test = DataProxy.use_device(X_test, y_test, self.device)
+                        test_pred, test_loss = self.forward_pass(X_test, y_test, 'test')
+                    self.compute_epoch_loss(test_dl, 'test')
+                    self.evaluate_epoch(test_dl, 'test')
             if verbose:
                 self.log_epoch(epoch)
         # final test predictions
@@ -188,17 +215,26 @@ class Regressor(Loggable):
         """
         self.plot.unblock()
         self.plot.plot_predictions(train_set, test_set, test_pred)
-        self.plot.plot_learning(self.losses['train'], self.losses['test'])
+        self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_pred = self.model(X)
         loss = self.lossFunction(y_pred, y_true)
         # instrumentation
-        self.losses[dataset_name].append(loss.cpu().detach().numpy())
-        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        self.collect_batch_loss(loss, dataset_name)
+        self.evaluate_batch(y_pred, y_true, dataset_name)
         return y_pred, loss
 
-    def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
+    def collect_batch_loss(self, loss, dataset_name='train'):
+        self.epochLosses[dataset_name]['_batch'].append(loss.cpu().detach().numpy())
+
+    def compute_epoch_loss(self, dataloader, dataset_name='train'):
+        self.epochLosses[dataset_name]['epoch'].append(loss_epoch := sum(self.epochLosses[dataset_name]['_batch']) / len(dataloader))
+
+    def evaluate_epoch(self, dataloader, dataset_name='train'):
+        self.epochMetrics[dataset_name]['epoch'].append(measure_epoch := sum(self.epochMetrics[dataset_name]['_batch']) / len(dataloader))
+
+    def evaluate_batch(self, y_pred, y_true, dataset_name='train'):
         """
         - for classification only, this method should return accuracy, precision, recall
         """
@@ -211,14 +247,14 @@ class Regressor(Loggable):
         pass
 
     def get_performance(self):
-        return {'train': self.losses['train'][-1], 'test': self.losses['test'][-1]}
+        return {'train': self.epochLosses['train']['epoch'][-1], 'test': self.epochLosses['test']['epoch'][-1]}
 
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
             return
-        msg = f"Epoch: {epoch} | Train Loss: {self.losses['train'][epoch]}"
-        if self.losses['test']:
-            msg += f" | Test Loss: {self.losses['test'][epoch]}"
+        msg = f"Epoch: {epoch} | Train Loss: {self.epochLosses['train']['epoch'][epoch]}"
+        if self.epochLosses['test']['epoch']:
+            msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]}"
         self.logger.info(msg)
 
     def predict(self, test_set, for_plot_only=False):
@@ -256,8 +292,8 @@ class Regressor(Loggable):
 
 
 class BinaryClassifier(Regressor):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optm, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
@@ -275,8 +311,8 @@ class BinaryClassifier(Regressor):
         y_pred = self._logits_to_labels(y_logits)
         loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
         # instrumentation
-        self.losses[dataset_name].append(loss.cpu().detach().numpy())
-        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        self.collect_batch_loss(loss, dataset_name)
+        self.evaluate_batch(y_pred, y_true, dataset_name)
         return y_pred, loss
 
     @staticmethod
@@ -292,19 +328,19 @@ class BinaryClassifier(Regressor):
     def _logits_to_probabilities(y_logits):
         return tc.sigmoid(y_logits)
 
-    def evaluate_epoch(self, y_pred, y_true, dataset_name='train'):
+    def evaluate_batch(self, y_pred, y_true, dataset_name='train'):
         """
         - for classification only, this method should return accuracy, precision, recall
         """
         meas = self.metrics[dataset_name](y_pred, y_true)
-        self.measures[dataset_name].append(meas)
+        self.epochMetrics[dataset_name]['_batch'].append(meas)
 
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
             return
-        msg = f"Epoch: {epoch} | Train Loss: {self.losses['train'][epoch]} | Train Accuracy: {self.measures['train'][epoch]}%"
-        if self.losses['test']:
-            msg += f" | Test Loss: {self.losses['test'][epoch]} | Test Accuracy: {self.measures['test'][epoch]}%"
+        msg = f"Epoch: {epoch} | Train Loss: {self.epochLosses['train']['epoch'][epoch]} | Train Accuracy: {self.epochMetrics['train']['epoch'][epoch]}%"
+        if self.epochLosses['test']['epoch']:
+            msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]} | Test Accuracy: {self.epochMetrics['test']['epoch'][epoch]}%"
         self.logger.info(msg)
 
     def evaluate(self):
@@ -334,7 +370,7 @@ class BinaryClassifier(Regressor):
     def plot_model(self, train_set, test_set, test_pred):
         self.plot.unblock()
         self.plot_predictions(train_set, test_set, test_pred)
-        self.plot.plot_learning(self.losses['train'], self.losses['test'])
+        self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
 
     def plot_predictions(self, train_set, test_set, predictions=None):
         """
@@ -372,8 +408,8 @@ class BinaryClassifier(Regressor):
 
 
 class MultiClassifier(BinaryClassifier):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optm, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
@@ -386,24 +422,13 @@ class MultiClassifier(BinaryClassifier):
         y_pred = self._logits_to_labels(y_logits)
         loss = self.lossFunction(y_logits, y_true)
         # instrumentation
-        self.losses[dataset_name].append(loss.cpu().detach().numpy())
-        self.evaluate_epoch(y_pred, y_true, dataset_name)
+        self.collect_batch_loss(loss, dataset_name)
+        self.evaluate_batch(y_pred, y_true, dataset_name)
         return y_pred, loss
 
     @staticmethod
     def _logits_to_labels(y_logits):
         return tc.softmax(y_logits, dim=1).argmax(dim=1)
-
-
-class BatchClassifier(MultiClassifier):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optm, learning_rate, device_name, logger, log_every_n_epochs)
-        self.batchSize = batch_size
-        self.shuffleBatch = shuffle
-
-    def main(self):
-        pass
-
 
 # endregion
 
@@ -421,6 +446,7 @@ class Plot:
         """
         fig, ax = plt.subplots(figsize=(10, 7))
         if train_set:
+            breakpoint()
             ax.scatter(train_set.data.cpu(), train_set.targets.cpu(), s=4, color='blue', label='Training Data')
         if test_set:
             ax.scatter(test_set.data.cpu(), test_set.targets.cpu(), s=4, color='green', label='Testing Data')
