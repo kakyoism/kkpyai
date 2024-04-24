@@ -446,7 +446,6 @@ class Plot:
         """
         fig, ax = plt.subplots(figsize=(10, 7))
         if train_set:
-            breakpoint()
             ax.scatter(train_set.data.cpu(), train_set.targets.cpu(), s=4, color='blue', label='Training Data')
         if test_set:
             ax.scatter(test_set.data.cpu(), test_set.targets.cpu(), s=4, color='green', label='Testing Data')
