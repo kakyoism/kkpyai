@@ -95,15 +95,16 @@ def test_regressor_model():
 
 def test_binaryclassifier_model():
     from sklearn.datasets import make_circles
+    # Make 1000 samples
+    n_samples = 2000
+    # to save time, we use the biggest batch size possible
     classifier = ktc.BinaryClassifier(tc.nn.Sequential(
         tc.nn.Linear(in_features=2, out_features=100),
         tc.nn.ReLU(),
         tc.nn.Linear(in_features=100, out_features=100),
         tc.nn.ReLU(),
         tc.nn.Linear(in_features=100, out_features=1),
-    ), learning_rate=0.1, log_every_n_epochs=100)
-    # Make 1000 samples
-    n_samples = 2000
+    ), learning_rate=0.1, batch_size=n_samples, log_every_n_epochs=100)
     # Create circles
     X, y = make_circles(n_samples,
                         noise=0.03,  # a little bit of noise to the dots
@@ -148,6 +149,7 @@ def test_multiclassifier_model():
         def forward(self, x):
             return self.linear_layer_stack(x)
 
+    n_samples = 1000
     # 1. Create multi-class data
     X, y = make_blobs(n_samples=1000,
                       n_features=NUM_FEATURES,  # X features
@@ -161,7 +163,7 @@ def test_multiclassifier_model():
     model = BlobModel(input_features=NUM_FEATURES,
                       output_features=NUM_CLASSES,
                       hidden_units=8)
-    classifier = ktc.MultiClassifier(model, learning_rate=0.1, log_every_n_epochs=100)
+    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=n_samples, log_every_n_epochs=100)
     train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
