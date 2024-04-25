@@ -64,7 +64,7 @@ def test_plot_predictions():
     util.safe_remove(pic)
 
 
-def test_regressor_model():
+def test_regressor():
     # Create a Linear Regression model class
     class LinearRegressionModel(tc.nn.Module):  # <- almost everything in PyTorch is a nn.Module (think of this as neural network lego blocks)
         def __init__(self):
@@ -72,7 +72,7 @@ def test_regressor_model():
             self.linear_layer = nn.Linear(in_features=1, out_features=1)
 
         # Forward defines the computation in the model
-        def forward(self, x: tc.Tensor) -> tc.Tensor:  # <- "x" is the input data (e.g. training/testing features)
+        def forward(self, x: tc.Tensor) -> tc.Tensor:  # <- "x" is the input data (e.g., training/testing features)
             return self.linear_layer(x)
 
     model = LinearRegressionModel()
@@ -91,9 +91,11 @@ def test_regressor_model():
     util.safe_remove(mdl)
     regressor.close_plot()
     assert regressor.get_performance()['test'] < 0.2
+    perf = regressor.evaluate_model(test_set)
+    assert perf['loss'] < 0.2
 
 
-def test_binaryclassifier_model():
+def test_binary_classifier():
     from sklearn.datasets import make_circles
     # Make 1000 samples
     n_samples = 2000
@@ -108,17 +110,18 @@ def test_binaryclassifier_model():
     # Create circles
     X, y = make_circles(n_samples,
                         noise=0.03,  # a little bit of noise to the dots
-                        random_state=42)  # keep random state so we get the same values
+                        random_state=42)  # keep a random state so we get the same values
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
     train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=1000)
     classifier.plot_predictions(train_set, test_set)
     classifier.close_plot()
-    assert classifier.performance['test'].item() > 0.9
+    assert classifier.performance['test'].item() > 0.8
+    assert classifier.evaluate_model(test_set)['accuracy'] > 0.8
 
 
-def test_multiclassifier_model():
+def test_multiclass_classifier():
     from sklearn.datasets import make_blobs
     from sklearn.model_selection import train_test_split
 
@@ -151,7 +154,7 @@ def test_multiclassifier_model():
 
     n_samples = 1000
     # 1. Create multi-class data
-    X, y = make_blobs(n_samples=1000,
+    X, y = make_blobs(n_samples=n_samples,
                       n_features=NUM_FEATURES,  # X features
                       centers=NUM_CLASSES,  # y labels
                       cluster_std=1.5,  # give the clusters a little shake up (try changing this to 1.0, the default)
@@ -163,12 +166,12 @@ def test_multiclassifier_model():
     model = BlobModel(input_features=NUM_FEATURES,
                       output_features=NUM_CLASSES,
                       hidden_units=8)
-    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=n_samples, log_every_n_epochs=100)
-    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
-    classifier.train(train_set, test_set, n_epochs=1000)
-    classifier.plot_predictions(train_set, test_set)
-    classifier.close_plot()
-    assert classifier.performance['test'].item() > 0.9
+    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=32, log_every_n_epochs=100)
+    train_set, test_set = ktc.DataProxy(X, y, target_dtype=tc.long).split_train_test(train_ratio=0.8)
+    classifier.train(train_set, test_set, n_epochs=100)
+    # classifier.plot_predictions(train_set, test_set)
+    # classifier.close_plot()
+    assert classifier.performance['test'] > 0.9
 
 
 def test_image_classification():

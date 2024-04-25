@@ -76,10 +76,10 @@ class TensorFactory(Loggable):
 # region dataset
 
 class DataProxy(tud.Dataset):
-    def __init__(self, data, targets=None, data_type=tc.float32, target_type=tc.float32):
+    def __init__(self, data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
         """
         - initializes the dataset.
-        - train and test sets must each use a separate instance of this class
+        - must instantiate train and test sets separately with this class
         - if data is a dataset, targets will be ignored
         - tc.Dataset offers train/test sets separately, so no split is needed
         - when targets are not provided, the dataset must be a tc.Dataset
@@ -92,9 +92,13 @@ class DataProxy(tud.Dataset):
         if not self.isTorchDataset:
             # Ensure data (numpy?) is a tensor for consistency
             if not isinstance(data, tc.Tensor):
-                self.data = tc.tensor(data, dtype=data_type)
+                self.data = tc.tensor(data, dtype=data_dtype)
             if targets is not None and not isinstance(targets, tc.Tensor):
-                self.targets = tc.tensor(targets, dtype=target_type)
+                self.targets = tc.tensor(targets, dtype=target_dtype)
+        if device:
+            self.data = self.data.to(device)
+            if self.targets is not None:
+                self.targets = self.targets.to(device)
 
     def __len__(self):
         return len(self.data)
@@ -115,6 +119,7 @@ class DataProxy(tud.Dataset):
     @staticmethod
     def use_device(X, y, device):
         return X.to(device), y.to(device)
+
 
 # endregion
 
@@ -206,10 +211,49 @@ class Regressor(Loggable):
                 self.log_epoch(epoch)
         stop_time = perf_timer()
         # final test predictions
-        self.evaluate(start_time, stop_time)
+        self.evaluate_training(start_time, stop_time)
         if verbose:
             self.plot_model(train_set, test_set, test_pred)
         return test_pred
+
+    def predict(self, data_set, for_plot_only=False):
+        """
+        - data_set must have no labels
+        """
+        dev = 'cpu' if for_plot_only else self.device
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        # Testing
+        # - eval mode is on by default after construction
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            for X, y_true in dl:
+                X, y_true = DataProxy.use_device(X, y_true, dev)
+                y_pred = self.model(X)
+        data_set.targets = y_pred.to(dev)
+        return data_set.targets
+
+    def evaluate_model(self, test_set):
+        """
+        - test_set must have labels
+        """
+        assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        # Testing
+        # - eval mode is on by default after construction
+        mean_loss = 0
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            for b, (X, y_true) in enumerate(dl):
+                X, y_true = DataProxy.use_device(X, y_true, self.device)
+                y_pred = self.model(X)
+                mean_loss += self.lossFunction(y_pred, y_true).item()
+            mean_loss /= len(dl)
+        return {
+            'model': type(self.model).__name__,
+            'loss': mean_loss,
+        }
 
     def plot_model(self, train_set, test_set, test_pred):
         """
@@ -243,7 +287,7 @@ class Regressor(Loggable):
         """
         pass
 
-    def evaluate(self, start_time, stop_time):
+    def evaluate_training(self, start_time, stop_time):
         """
         - training time
         - loss and metric
@@ -260,21 +304,6 @@ class Regressor(Loggable):
         if self.epochLosses['test']['epoch']:
             msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]}"
         self.logger.info(msg)
-
-    def predict(self, test_set, for_plot_only=False):
-        """
-        - test_set can have no labels
-        """
-        dev = 'cpu' if for_plot_only else self.device
-        X_test = test_set.data.to(dev)
-        # Testing
-        # - eval mode is on by default after construction
-        self.model.eval()
-        # - forward pass
-        with tc.inference_mode():
-            y_pred = self.model(X_test)
-        test_set.targets = y_pred.to(dev)
-        return test_set.targets
 
     def close_plot(self):
         self.plot.close()
@@ -301,6 +330,55 @@ class BinaryClassifier(Regressor):
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
+
+    def predict(self, data_set, for_plot_only=False):
+        """
+        - data_set must have no labels and must be filled by this method
+        - we don't evaluate model here
+        """
+        assert tc.isnan(data_set.targets).all(), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
+        dev = 'cpu' if for_plot_only else self.device
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        # Testing
+        # - eval mode is on by default after construction
+        y_pred_set = []
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            for b, (X, y_true) in enumerate(dl):
+                X, y_true = DataProxy.use_device(X, y_true, dev)
+                y_logits = self.model(X).squeeze()
+                y_pred = self._logits_to_labels(y_logits)
+                y_pred_set.append(y_pred)
+        data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
+        return data_set.targets
+
+    def evaluate_model(self, test_set):
+        """
+        - test_set must have labels
+        """
+        assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        # Testing
+        # - eval mode is on by default after construction
+        mean_loss = 0
+        metric = tm.classification.Accuracy(task='binary').to(self.device)
+        self.model.eval()
+        # - forward pass
+        with tc.inference_mode():
+            for b, (X, y_true) in enumerate(dl):
+                X, y_true = DataProxy.use_device(X, y_true, self.device)
+                y_logits = self.model(X).squeeze()
+                y_pred = self._logits_to_labels(y_logits)
+                mean_loss += self.lossFunction(self._logits_to_probabilities(y_logits), y_true).item()
+                metric(y_pred, y_true)
+            mean_loss /= len(dl)
+        acc = metric.compute()
+        return {
+            'model': type(self.model).__name__,
+            'loss': mean_loss,
+            'accuracy': acc,
+        }
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         """
@@ -347,30 +425,20 @@ class BinaryClassifier(Regressor):
             msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]} | Test Accuracy: {self.epochMetrics['test']['epoch'][epoch]}%"
         self.logger.info(msg)
 
-    def evaluate(self, start_time, stop_time):
-        super().evaluate(start_time, stop_time)
+    def evaluate_training(self, start_time, stop_time):
+        super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
-            self.performance[dataset_name] = self.metrics[dataset_name].compute()
-            self.logger.info(f'{dataset_name.capitalize()} Accuracy: {self.performance[dataset_name]}%')
+            self.performance[dataset_name] = self.metrics[dataset_name].compute().item()
+            self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {self.performance[dataset_name]}%')
             self.metrics[dataset_name].reset()
 
     def get_performance(self):
         return self.performance
 
-    def predict(self, test_set, for_plot_only=False):
-        """
-        - test_set can have no labels
-        """
-        dev = 'cpu' if for_plot_only else self.device
-        X_test = test_set.data.to(dev)
-        # Testing
-        # - eval mode is on by default after construction
-        self.model.eval()
-        # - forward pass
-        with tc.inference_mode():
-            y_logits = self.model(X_test).squeeze()
-        test_set.targets = self._logits_to_labels(y_logits).to(dev)
-        return test_set.targets
+    def accuracy_fn(self, y_pred, y_true):
+        correct = tc.eq(y_true, y_pred).sum().item()  # torch.eq() calculates where two tensors are equal
+        acc = (correct / len(y_pred)) * 100
+        return acc
 
     def plot_model(self, train_set, test_set, test_pred):
         self.plot.unblock()
@@ -383,6 +451,7 @@ class BinaryClassifier(Regressor):
         - create special dataset and run model on it for visualization (2D)
         - ref: https://github.com/mrdbourke/pytorch-deep-learning/blob/main/helper_functions.py
         """
+
         def _predict_dataset(dataset):
             # Put everything to CPU (works better with NumPy + Matplotlib)
             self.model.to("cpu")
@@ -391,19 +460,17 @@ class BinaryClassifier(Regressor):
             x_min, x_max = X[:, 0].min() - 0.1, X[:, 0].max() + 0.1
             y_min, y_max = X[:, 1].min() - 0.1, X[:, 1].max() + 0.1
             n_data = 100
-            xx, yy = np.meshgrid(np.linspace(x_min, x_max, n_data+1), np.linspace(y_min, y_max, n_data+1))
-            # Make features
+            xx, yy = np.meshgrid(np.linspace(x_min, x_max, n_data + 1), np.linspace(y_min, y_max, n_data + 1))
+            # Interpolate to create new data for plotting
             X_plottable = tc.from_numpy(np.column_stack((xx.ravel(), yy.ravel()))).float()
             # Make predictions
-            plot_set = DataProxy(X_plottable, tc.zeros(X_plottable.shape[0]).to('cpu'))
+            # - loss function requires that label be of the same size as data
+            # - instead of using squeeze/unsqueeze, we initialize with dummy labels
+            plot_set = DataProxy(X_plottable, tc.full((len(X_plottable),), float('nan')), target_dtype=tc.long, device='cpu')
             y_pred = self.predict(plot_set, for_plot_only=True)
-            # # Test for multi-class or binary and adjust logits to prediction labels
-            # if len(tc.unique(y)) > 2:
-            #     y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # multi-class
-            # else:
-            #     y_pred = tc.round(tc.sigmoid(y_logits))  # binary
-            # Reshape preds and plot
+            self.model.to(self.device)
             return y_pred.reshape(xx.shape).detach().numpy()
+
         if train_set:
             train_pred = _predict_dataset(train_set)
             self.plot.plot_decision_boundary(train_set, train_pred)
@@ -419,12 +486,56 @@ class MultiClassifier(BinaryClassifier):
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
 
+    def train(self, train_set: DataProxy, test_set: DataProxy = None, n_epochs=1000, seed=42):
+        """
+        - must call DataProxy(data, labels) or DataProxy(dataset: tc.Dataset) to create datasets first
+        - have split train/test sets for easy tracking learning performance side-by-side
+        - both datasets must contain data and labels
+        """
+        # Put data to a target device
+        X_blob_train, y_blob_train = train_set.data.to(self.device), train_set.targets.to(self.device)
+        X_blob_test, y_blob_test = test_set.data.to(self.device), test_set.targets.to(self.device)
+
+        for epoch in range(n_epochs):
+            self.model.train()
+            # 1. Forward pass
+            y_logits = self.model(X_blob_train)  # model outputs raw logits
+            if not self.labelCountIsKnown:
+                self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
+                self.labelCountIsKnown = True
+            y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # go from logits -> prediction probabilities -> prediction labels
+            # print(y_logits)
+            # 2. Calculate loss and accuracy
+            loss = self.lossFunction(y_logits, y_blob_train)
+            acc = self.accuracy_fn(y_pred=y_pred, y_true=y_blob_train)
+            self.epochLosses['train']['epoch'].append(loss.item())
+            self.epochMetrics['train']['epoch'].append(acc)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.model.eval()
+            with tc.inference_mode():
+                # 1. Forward pass
+                test_logits = self.model(X_blob_test)
+                test_pred = tc.softmax(test_logits, dim=1).argmax(dim=1)
+                # 2. Calculate test loss and accuracy
+                test_loss = self.lossFunction(test_logits, y_blob_test)
+                test_acc = self.accuracy_fn(y_pred=test_pred, y_true=y_blob_test)
+                tm_acc = self.metrics['test'](test_pred, y_blob_test)
+                self.epochMetrics['test']['epoch'].append(acc)
+            # Print out what's happening
+            if epoch % 10 == 0:
+                print(f"Epoch: {epoch} | Loss: {loss:.5f}, Acc: {acc:.2f}% | Test Loss: {test_loss:.5f}, Test Acc: {test_acc:.2f}%, TM Acc: {tm_acc}")
+        self.performance['test'] = tm_acc
+
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)
         if not self.labelCountIsKnown:
             self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
             self.labelCountIsKnown = True
         y_pred = self._logits_to_labels(y_logits)
+        # loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
         loss = self.lossFunction(y_logits, y_true)
         # instrumentation
         self.collect_batch_loss(loss, dataset_name)
@@ -432,8 +543,29 @@ class MultiClassifier(BinaryClassifier):
         return y_pred, loss
 
     @staticmethod
+    def _logits_to_probabilities(y_logits):
+        dim_cls = 1
+        return tc.softmax(y_logits, dim=dim_cls)
+        # return y_logits
+
+    @staticmethod
     def _logits_to_labels(y_logits):
-        return tc.softmax(y_logits, dim=1).argmax(dim=1)
+        """
+        - dim 0: along samples
+        - dim 1: along classes
+        - for each logits sample below, we must first softmax all logits across the classes dimension, then pick the class with the highest probability
+        - so the processing is always along the classes dimension (dim 1)
+          tensor([[-0.5566, -0.6590,  1.0053, -0.1095],
+                [-0.7012, -0.8162,  1.3412, -0.1254],
+                [-0.4109,  1.4493,  0.6572,  1.5839],
+                ...,
+                [-0.3833,  1.5534,  0.5927,  1.6507],
+                [ 0.0991,  1.5113, -0.5255,  1.2166],
+                [ 0.2739,  1.7573, -0.9321,  1.2839]], device='mps:0',
+        """
+        dim_cls = 1
+        return tc.softmax(y_logits, dim=dim_cls).argmax(dim=dim_cls)
+
 
 # endregion
 
