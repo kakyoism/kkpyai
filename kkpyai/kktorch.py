@@ -493,8 +493,7 @@ class MultiClassifier(BinaryClassifier):
             self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
             self.labelCountIsKnown = True
         y_pred = self._logits_to_labels(y_logits)
-        # loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
-        loss = self.lossFunction(y_logits, y_true)
+        loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
         # instrumentation
         self.collect_batch_loss(loss, dataset_name)
         self.evaluate_batch(y_pred, y_true, dataset_name)
