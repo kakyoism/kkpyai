@@ -652,6 +652,19 @@ class Plot:
             ax.axis('off')
         plt.show(block=self.useBlocking)
 
+    def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), pick_random=True, color_map='gray', seed=None):
+        if seed:
+            tc.manual_seed(seed)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=fig_size)
+        for i, ax in enumerate(axes.flat):
+            p = np.random.randint(0, len(img_set)) if pick_random else i
+            img, label = img_set[p]
+            pred = predictions[p]
+            ax.imshow(img.squeeze(), cmap=color_map)
+            ax.set_title(f'Pred: {img_set.classes[pred]} -> Truth: {img_set.classes[label]}')
+            ax.axis('off')
+        plt.show(block=self.useBlocking)
+
     def block(self):
         self.useBlocking = True
 

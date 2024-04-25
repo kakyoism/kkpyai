@@ -245,5 +245,8 @@ def test_image_classifier():
     train_set = ktc.ImageDataProxy(train_data)
     test_set = ktc.ImageDataProxy(test_data)
     classifier.train(train_set, test_set, n_epochs=3)
+    plot = ktc.Plot()
+    plot.plot_image_predictions(test_set, classifier.predict(test_set, for_plot_only=True))
+    breakpoint()
     perf = classifier.evaluate_model(test_set)
     assert perf['accuracy'] > 0.6
