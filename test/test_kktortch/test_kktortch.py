@@ -183,31 +183,19 @@ def test_image_classification():
     import matplotlib.pyplot as plt
     # Check versions
     # Note: your PyTorch version shouldn't be lower than 1.10.0 and torchvision version shouldn't be lower than 0.11
-    print(f"PyTorch version: {tc.__version__}\ntorchvision version: {tcv.__version__}")
+    util.glogger.info(f"PyTorch version: {tc.__version__}\ntorchvision version: {tcv.__version__}")
     # Setup training data
-    train_data = datasets.FashionMNIST(
-        root=osp.join(_gen_dir, 'data'),  # where to download data to?
-        train=True,  # get training data
-        download=True,  # download data if it doesn't exist on disk
-        transform=ToTensor(),  # images come as PIL format, we want to turn into Torch tensors
-        target_transform=None  # you can transform labels as well
-    )
-    # Setup testing data
-    test_data = datasets.FashionMNIST(
-        root=osp.join(_gen_dir, 'data'),
-        train=False,  # get test data
-        download=True,
-        transform=ToTensor()
-    )
+    train_data = ktc.retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST)
+    test_data = ktc.retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST)
     # See first training sample
     image, label = train_data[0]
     # data shape?
-    print(image, label, image.shape)
+    util.glogger.info(image, label, image.shape)
     # How many samples are there?
-    print(len(train_data.data), len(train_data.targets), len(test_data.data), len(test_data.targets))
+    util.glogger.info(len(train_data.data), len(train_data.targets), len(test_data.data), len(test_data.targets))
     # See classes
     class_names = train_data.classes
-    print(class_names)
+    util.glogger.info(class_names)
     # visualize
     plt.imshow(image.squeeze())  # image shape is [1, 28, 28] (colour channels, height, width)
     plt.title(label)
@@ -237,6 +225,6 @@ def test_image_classification():
                                  shuffle=False  # don't necessarily have to shuffle the testing data
                                  )
     # Let's check out what we've created
-    print(f"Dataloaders: {train_dataloader, test_dataloader}")
-    print(f"Length of train dataloader: {len(train_dataloader)} batches of {BATCH_SIZE}")
-    print(f"Length of test dataloader: {len(test_dataloader)} batches of {BATCH_SIZE}")
+    util.glogger.info(f"Dataloaders: {train_dataloader, test_dataloader}")
+    util.glogger.info(f"Length of train dataloader: {len(train_dataloader)} batches of {BATCH_SIZE}")
+    util.glogger.info(f"Length of test dataloader: {len(test_dataloader)} batches of {BATCH_SIZE}")

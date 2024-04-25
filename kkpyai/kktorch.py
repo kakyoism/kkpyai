@@ -7,11 +7,12 @@ import typing
 import kkpyutil as util
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.model_selection import train_test_split
 from timeit import default_timer as perf_timer
 import torch as tc
 import torch.utils.data as tud
 import torchmetrics as tm
-from sklearn.model_selection import train_test_split
+import torchvision as tcv
 from tqdm.auto import tqdm
 
 
@@ -75,6 +76,20 @@ class TensorFactory(Loggable):
 
 # region dataset
 
+
+def retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST, local_dir=osp.join(util.get_platform_appdata_dir(), 'torch'), transform=tcv.transforms.ToTensor(), target_transform=None):
+    """
+    - FashionMNIST is a drop-in replacement for MNIST
+    - images come as PIL format, we want to turn into Torch tensors
+    - ref: https://pytorch.org/vision/stable/datasets.html#fashion-mnist
+    """
+    return data_cls(local_dir, train=True, download=True, transform=transform, target_transform=target_transform)
+
+
+def retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST, local_dir=osp.join(util.get_platform_appdata_dir(), 'torch'), transform=tcv.transforms.ToTensor(), target_transform=None):
+    return data_cls(local_dir, train=False, download=True, transform=transform, target_transform=target_transform)
+
+
 class DataProxy(tud.Dataset):
     def __init__(self, data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
         """
@@ -120,11 +135,10 @@ class DataProxy(tud.Dataset):
     def use_device(X, y, device):
         return X.to(device), y.to(device)
 
-
 # endregion
 
-# region model
 
+# region model
 
 class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
@@ -321,7 +335,7 @@ class Regressor(Loggable):
 
     @staticmethod
     def _compose_model_name(model_basename, ext):
-        return osp.join(util.get_platform_tmp_dir(), 'torch', f'{model_basename}{ext}')
+        return osp.join(util.get_platform_appdata_dir(), 'torch', f'{model_basename}{ext}')
 
 
 class BinaryClassifier(Regressor):
