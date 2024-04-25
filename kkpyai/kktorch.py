@@ -488,6 +488,10 @@ class MultiClassifier(BinaryClassifier):
         self.metrics = {'train': None, 'test': None}
 
     def forward_pass(self, X, y_true, dataset_name='train'):
+        """
+        - using probability for loss will need more epochs (10x) than using logits directly, e.g., 100 vs. 1000
+        - but using probability theoretically more accurate
+        """
         y_logits = self.model(X)
         if not self.labelCountIsKnown:
             self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
