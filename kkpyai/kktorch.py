@@ -2,6 +2,7 @@ import functools
 import operator
 import os
 import os.path as osp
+import pprint as pp
 import typing
 # 3rd party
 import kkpyutil as util
@@ -90,14 +91,38 @@ def retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST, local_dir=osp.jo
     return data_cls(local_dir, train=False, download=True, transform=transform, target_transform=target_transform)
 
 
-class DataProxy(tud.Dataset):
+def inspect_dataset(dataset, block=True, cmap='gray'):
+    """
+    - list key dataset properties for debug, e.g.,
+    - shapes and sizes are crucial to later matrix ops for model training and visualization
+    """
+    assert len(dataset) > 0, 'Dataset is empty'
+    data, label = dataset[0]
+    pp.pprint(f"""\
+- dataset: {type(dataset).__name__}
+- data shape: {data.shape}
+- label shape: {label.shape if isinstance(label, tc.Tensor) else None}
+- data type: {data.dtype}
+- data size: {len(dataset.data)}
+- label size: {len(dataset.targets)}
+- label classes: {dataset.classes}
+- first data point: data: {data}, label: {label}
+""")
+    # if data is a PIL image or numpy array, show as image
+    data_disp = data.numpy() if isinstance(data, tc.Tensor) else data
+    fig, ax = plt.subplots(1, 1)
+    ax.imshow(data_disp.squeeze(), cmap=cmap)
+    ax.set_title(dataset.classes[label])
+    plt.axis("Off")
+    plt.show(block=block)
+
+
+class DataProxyBase(tud.Dataset):
     def __init__(self, data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
         """
         - initializes the dataset.
         - must instantiate train and test sets separately with this class
-        - if data is a dataset, targets will be ignored
         - tc.Dataset offers train/test sets separately, so no split is needed
-        - when targets are not provided, the dataset must be a tc.Dataset
         - split_train_test() only works for loose data, e.g., tensors or numpy arrays
         """
         self.data = data
@@ -119,13 +144,16 @@ class DataProxy(tud.Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        if self.isTorchDataset:
-            return self.data[idx]
         item = self.data[idx]
-        if self.targets is not None:
-            target = self.targets[idx]
-            return item, target
-        return item
+        target = self.targets[idx]
+        return item, target
+
+    @staticmethod
+    def create(data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
+        import torchvision.datasets.vision as tdv
+        if isinstance(data, tdv.VisionDataset):
+            return ImageDataProxy(data, device=device)
+        return DataProxy(data, targets, data_dtype, target_dtype, device)
 
     def split_train_test(self, train_ratio=0.8, random_seed=42):
         X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
@@ -134,6 +162,29 @@ class DataProxy(tud.Dataset):
     @staticmethod
     def use_device(X, y, device):
         return X.to(device), y.to(device)
+
+
+class DataProxy(DataProxyBase):
+    def __init__(self, data, targets, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
+        super().__init__(data, targets)
+        self.data = data
+        self.targets = targets
+        # Ensure data (numpy?) is a tensor for consistency
+        if not isinstance(data, tc.Tensor):
+            self.data = tc.tensor(data, dtype=data_dtype)
+        if targets is not None and not isinstance(targets, tc.Tensor):
+            self.targets = tc.tensor(targets, dtype=target_dtype)
+        if device:
+            self.data = self.data.to(device)
+            if self.targets is not None:
+                self.targets = self.targets.to(device)
+
+
+class ImageDataProxy(DataProxyBase):
+    def __init__(self, dataset, device=None):
+        super().__init__(dataset, None, device)
+        self.data = tc.stack([img for img, label in dataset])
+        self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
 
 # endregion
 
@@ -227,7 +278,7 @@ class Regressor(Loggable):
         # final test predictions
         self.evaluate_training(start_time, stop_time)
         if verbose:
-            self.plot_model(train_set, test_set, test_pred)
+            self.plot_learning()
         return test_pred
 
     def predict(self, data_set, for_plot_only=False):
@@ -269,13 +320,12 @@ class Regressor(Loggable):
             'loss': mean_loss,
         }
 
-    def plot_model(self, train_set, test_set, test_pred):
+    def plot_learning(self):
         """
         - prediction quality
         - learning curves
         """
         self.plot.unblock()
-        self.plot.plot_predictions(train_set, test_set, test_pred)
         self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
 
     def forward_pass(self, X, y_true, dataset_name='train'):
@@ -314,9 +364,11 @@ class Regressor(Loggable):
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
             return
-        msg = f"Epoch: {epoch} | Train Loss: {self.epochLosses['train']['epoch'][epoch]}"
+        train_loss_percent = 100*self.epochLosses['train']['epoch'][epoch]
+        msg = f"Epoch: {epoch} | Train Loss: {train_loss_percent:.4f}%"
         if self.epochLosses['test']['epoch']:
-            msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]}"
+            test_loss_percent = 100*self.epochLosses['test']['epoch'][epoch]
+            msg += f" | Test Loss: {test_loss_percent:.4f}%"
         self.logger.info(msg)
 
     def close_plot(self):
@@ -375,8 +427,10 @@ class BinaryClassifier(Regressor):
         dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
         # Testing
         # - eval mode is on by default after construction
-        mean_loss = 0
-        metric = tm.classification.Accuracy(task='binary').to(self.device)
+        n_classes = tc.unique(test_set.targets).shape[0]
+        mean_loss, mean_acc = 0, 0
+        task = 'binary' if n_classes == 2 else 'multiclass'
+        metric = tm.classification.Accuracy(task=task).to(self.device) if n_classes < 3 else tm.classification.Accuracy(task=task, num_classes=n_classes).to(self.device)
         self.model.eval()
         # - forward pass
         with tc.inference_mode():
@@ -385,13 +439,14 @@ class BinaryClassifier(Regressor):
                 y_logits = self.model(X).squeeze()
                 y_pred = self._logits_to_labels(y_logits)
                 mean_loss += self.lossFunction(self._logits_to_probabilities(y_logits), y_true).item()
-                metric(y_pred, y_true)
+                mean_acc += metric(y_pred, y_true)
             mean_loss /= len(dl)
+            mean_acc /= len(dl)
         acc = metric.compute()
         return {
             'model': type(self.model).__name__,
             'loss': mean_loss,
-            'accuracy': acc,
+            'accuracy': mean_acc.item(),
         }
 
     def forward_pass(self, X, y_true, dataset_name='train'):
@@ -449,14 +504,9 @@ class BinaryClassifier(Regressor):
     def get_performance(self):
         return self.performance
 
-    def plot_model(self, train_set, test_set, test_pred):
-        self.plot.unblock()
-        self.plot_predictions(train_set, test_set, test_pred)
-        self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
-
-    def plot_predictions(self, train_set, test_set, predictions=None):
+    def plot_2d_predictions(self, train_set, test_set, predictions=None):
         """
-        - assume 2D dataset, plot decision boundaries
+        - assume 2D dataset (ds.data is [dim1, dim2]), plot decision boundaries
         - create special dataset and run model on it for visualization (2D)
         - ref: https://github.com/mrdbourke/pytorch-deep-learning/blob/main/helper_functions.py
         """

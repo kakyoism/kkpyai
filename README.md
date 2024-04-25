@@ -1,3 +1,3 @@
 # kkpyai
 
-Utility over popular low-level AI libraries
+AI utility based on popular low-level AI libraries
