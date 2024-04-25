@@ -174,7 +174,7 @@ def test_multiclass_classifier():
     assert classifier.performance['test'] > 0.9
 
 
-def test_image_classification():
+def test_image_classifier():
     import torchvision as tcv
     from torchvision import datasets
     from torchvision.transforms import ToTensor
@@ -196,22 +196,10 @@ def test_image_classification():
     # See classes
     class_names = train_data.classes
     util.glogger.info(class_names)
-    # visualize
-    plt.imshow(image.squeeze())  # image shape is [1, 28, 28] (colour channels, height, width)
-    plt.title(label)
-    plt.imshow(image.squeeze(), cmap="gray")
-    plt.title(class_names[label])
     # Plot more images: random selection
     tc.manual_seed(42)
-    fig = plt.figure(figsize=(9, 9))
-    rows, cols = 4, 4
-    for i in range(1, rows * cols + 1):
-        random_idx = tc.randint(0, len(train_data), size=[1]).item()
-        img, label = train_data[random_idx]
-        fig.add_subplot(rows, cols, i)
-        plt.imshow(img.squeeze(), cmap="gray")
-        plt.title(class_names[label])
-        plt.axis(False)
+    plot = ktc.Plot()
+    plot.plot_image_grid(train_data)
     # Set up the batch size hyperparameter
     BATCH_SIZE = 32
     # Turn datasets into iterables (batches)

@@ -586,6 +586,18 @@ class Plot:
         plt.xlim(xx.min(), xx.max())
         plt.ylim(yy.min(), yy.max())
 
+    def plot_image_grid(self, img_set, n_rows=4, n_cols=4, fig_size=(9, 9), pick_random=True, color_map='gray', seed=None):
+        if seed:
+            tc.manual_seed(seed)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=fig_size)
+        for i, ax in enumerate(axes.flat):
+            p = np.random.randint(0, len(img_set)) if pick_random else i
+            img, label = img_set[p]
+            ax.imshow(img.squeeze(), cmap=color_map)
+            ax.set_title(img_set.classes[label])
+            ax.axis('off')
+        plt.show(block=self.useBlocking)
+
     def block(self):
         self.useBlocking = True
 
