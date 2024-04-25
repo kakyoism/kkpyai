@@ -489,9 +489,13 @@ class BinaryClassifier(Regressor):
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
             return
-        msg = f"Epoch: {epoch} | Train Loss: {self.epochLosses['train']['epoch'][epoch]} | Train Accuracy: {self.epochMetrics['train']['epoch'][epoch]}%"
+        train_loss_percent = 100 * self.epochLosses['train']['epoch'][epoch]
+        train_acc_percent = 100 * self.epochMetrics['train']['epoch'][epoch]
+        msg = f"Epoch: {epoch} | Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%"
         if self.epochLosses['test']['epoch']:
-            msg += f" | Test Loss: {self.epochLosses['test']['epoch'][epoch]} | Test Accuracy: {self.epochMetrics['test']['epoch'][epoch]}%"
+            test_loss_percent = 100 * self.epochLosses['test']['epoch'][epoch]
+            test_acc_percent = 100 * self.epochMetrics['test']['epoch'][epoch]
+            msg += f" | Test Loss: {test_loss_percent:.4f}% | Test Accuracy: {test_acc_percent:.4f}%"
         self.logger.info(msg)
 
     def evaluate_training(self, start_time, stop_time):
