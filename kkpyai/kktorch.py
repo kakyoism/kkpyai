@@ -429,17 +429,11 @@ class BinaryClassifier(Regressor):
         super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
             self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch'])/len(self.epochMetrics[dataset_name]['epoch'])
-            # breakpoint()
             self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {self.performance[dataset_name]}%')
             self.metrics[dataset_name].reset()
 
     def get_performance(self):
         return self.performance
-
-    def accuracy_fn(self, y_pred, y_true):
-        correct = tc.eq(y_true, y_pred).sum().item()  # torch.eq() calculates where two tensors are equal
-        acc = (correct / len(y_pred)) * 100
-        return acc
 
     def plot_model(self, train_set, test_set, test_pred):
         self.plot.unblock()
@@ -488,10 +482,6 @@ class MultiClassifier(BinaryClassifier):
         self.metrics = {'train': None, 'test': None}
 
     def forward_pass(self, X, y_true, dataset_name='train'):
-        """
-        - using probability for loss will need more epochs (10x) than using logits directly, e.g., 100 vs. 1000
-        - but using probability theoretically more accurate
-        """
         y_logits = self.model(X)
         if not self.labelCountIsKnown:
             self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
@@ -505,9 +495,14 @@ class MultiClassifier(BinaryClassifier):
 
     @staticmethod
     def _logits_to_probabilities(y_logits):
+        """
+        - softmax is not necessarily needed
+        - observation: using probability for loss will often need smaller batches and more epochs than using logits directly, e.g., 100 vs. 1000
+        - but using probability is theoretically more accurate
+        - ref: https://github.com/mrdbourke/pytorch-deep-learning/discussions/314
+        """
         dim_cls = 1
         return tc.softmax(y_logits, dim=dim_cls)
-        # return y_logits
 
     @staticmethod
     def _logits_to_labels(y_logits):
