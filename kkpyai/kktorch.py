@@ -492,10 +492,12 @@ class MultiClassifier(BinaryClassifier):
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
+        start_time = perf_timer()
+        tc.manual_seed(seed)
         # Put data to a target device
         X_blob_train, y_blob_train = train_set.data.to(self.device), train_set.targets.to(self.device)
         X_blob_test, y_blob_test = test_set.data.to(self.device), test_set.targets.to(self.device)
-
+        verbose = self.logPeriodEpoch > 0
         for epoch in range(n_epochs):
             self.model.train()
             # 1. Forward pass
@@ -528,6 +530,10 @@ class MultiClassifier(BinaryClassifier):
             if epoch % 10 == 0:
                 print(f"Epoch: {epoch} | Loss: {loss:.5f}, Acc: {acc:.2f}% | Test Loss: {test_loss:.5f}, Test Acc: {test_acc:.2f}%, TM Acc: {tm_acc}")
         self.performance['test'] = tm_acc
+        stop_time = perf_timer()
+        if verbose:
+            self.plot_model(train_set, test_set, test_pred)
+        return test_pred
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)
