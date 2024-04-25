@@ -428,7 +428,6 @@ class BinaryClassifier(Regressor):
     def evaluate_training(self, start_time, stop_time):
         super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
-            # breakpoint()
             self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch'])/len(self.epochMetrics[dataset_name]['epoch'])
             # breakpoint()
             self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {self.performance[dataset_name]}%')
@@ -487,57 +486,6 @@ class MultiClassifier(BinaryClassifier):
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
-
-    def train(self, train_set: DataProxy, test_set: DataProxy = None, n_epochs=1000, seed=42):
-        """
-        - must call DataProxy(data, labels) or DataProxy(dataset: tc.Dataset) to create datasets first
-        - have split train/test sets for easy tracking learning performance side-by-side
-        - both datasets must contain data and labels
-        """
-        start_time = perf_timer()
-        tc.manual_seed(seed)
-        # Put data to a target device
-        X_blob_train, y_blob_train = train_set.data.to(self.device), train_set.targets.to(self.device)
-        X_blob_test, y_blob_test = test_set.data.to(self.device), test_set.targets.to(self.device)
-        verbose = self.logPeriodEpoch > 0
-        for epoch in range(n_epochs):
-            self.model.train()
-            # 1. Forward pass
-            y_logits = self.model(X_blob_train)  # model outputs raw logits
-            if not self.labelCountIsKnown:
-                self.metrics = {'train': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device), 'test': tm.classification.Accuracy(task='multiclass', num_classes=y_logits.shape[1]).to(self.device)}
-                self.labelCountIsKnown = True
-            y_pred = tc.softmax(y_logits, dim=1).argmax(dim=1)  # go from logits -> prediction probabilities -> prediction labels
-            # print(y_logits)
-            # 2. Calculate loss and accuracy
-            loss = self.lossFunction(y_logits, y_blob_train)
-            acc = self.accuracy_fn(y_pred=y_pred, y_true=y_blob_train)
-            self.epochLosses['train']['epoch'].append(loss.item())
-            self.epochMetrics['train']['epoch'].append(acc)
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            self.model.eval()
-            with tc.inference_mode():
-                # 1. Forward pass
-                test_logits = self.model(X_blob_test)
-                test_pred = tc.softmax(test_logits, dim=1).argmax(dim=1)
-                # 2. Calculate test loss and accuracy
-                test_loss = self.lossFunction(test_logits, y_blob_test)
-                test_acc = self.accuracy_fn(y_pred=test_pred, y_true=y_blob_test)
-                tm_acc = self.metrics['test'](test_pred, y_blob_test)
-                self.epochMetrics['test']['epoch'].append(acc)
-            # Print out what's happening
-            if epoch % 10 == 0:
-                print(f"Epoch: {epoch} | Loss: {loss:.5f}, Acc: {acc:.2f}% | Test Loss: {test_loss:.5f}, Test Acc: {test_acc:.2f}%, TM Acc: {tm_acc}")
-        self.performance['test'] = tm_acc
-        stop_time = perf_timer()
-        # final test predictions
-        self.evaluate_training(start_time, stop_time)
-        if verbose:
-            self.plot_model(train_set, test_set, test_pred)
-        return test_pred
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)

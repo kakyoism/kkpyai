@@ -166,11 +166,11 @@ def test_multiclass_classifier():
     model = BlobModel(input_features=NUM_FEATURES,
                       output_features=NUM_CLASSES,
                       hidden_units=8)
-    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=32, log_every_n_epochs=100)
+    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=int(n_samples/2), log_every_n_epochs=100)
     train_set, test_set = ktc.DataProxy(X, y, target_dtype=tc.long).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=100)
-    # classifier.plot_predictions(train_set, test_set)
-    # classifier.close_plot()
+    classifier.plot_predictions(train_set, test_set)
+    classifier.close_plot()
     assert classifier.performance['test'] > 0.9
 
 
