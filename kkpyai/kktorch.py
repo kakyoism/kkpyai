@@ -428,7 +428,9 @@ class BinaryClassifier(Regressor):
     def evaluate_training(self, start_time, stop_time):
         super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
-            self.performance[dataset_name] = self.metrics[dataset_name].compute().item()
+            # breakpoint()
+            self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch'])/len(self.epochMetrics[dataset_name]['epoch'])
+            # breakpoint()
             self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {self.performance[dataset_name]}%')
             self.metrics[dataset_name].reset()
 
@@ -531,6 +533,8 @@ class MultiClassifier(BinaryClassifier):
                 print(f"Epoch: {epoch} | Loss: {loss:.5f}, Acc: {acc:.2f}% | Test Loss: {test_loss:.5f}, Test Acc: {test_acc:.2f}%, TM Acc: {tm_acc}")
         self.performance['test'] = tm_acc
         stop_time = perf_timer()
+        # final test predictions
+        self.evaluate_training(start_time, stop_time)
         if verbose:
             self.plot_model(train_set, test_set, test_pred)
         return test_pred
