@@ -190,6 +190,7 @@ class ImageDataProxy(DataProxyBase):
         self.data = tc.stack([img for img, label in dataset])
         self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
 
+
 # endregion
 
 
@@ -365,10 +366,10 @@ class Regressor(Loggable):
     def log_epoch(self, epoch):
         if epoch % self.logPeriodEpoch != 0:
             return
-        train_loss_percent = 100*self.epochLosses['train']['epoch'][epoch]
+        train_loss_percent = 100 * self.epochLosses['train']['epoch'][epoch]
         msg = f"Epoch: {epoch} | Train Loss: {train_loss_percent:.4f}%"
         if self.epochLosses['test']['epoch']:
-            test_loss_percent = 100*self.epochLosses['test']['epoch'][epoch]
+            test_loss_percent = 100 * self.epochLosses['test']['epoch'][epoch]
             msg += f" | Test Loss: {test_loss_percent:.4f}%"
         self.logger.info(msg)
 
@@ -503,8 +504,8 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
     def evaluate_training(self, start_time, stop_time):
         super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
-            self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch'])/len(self.epochMetrics[dataset_name]['epoch'])
-            self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {100*self.performance[dataset_name]:.4f}%')
+            self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch']) / len(self.epochMetrics[dataset_name]['epoch'])
+            self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {100 * self.performance[dataset_name]:.4f}%')
             self.metrics[dataset_name].reset()
 
     def get_performance(self):
@@ -574,7 +575,6 @@ class MultiClassifier(BinaryClassifier):
     #             y_pred_set.append(y_pred)
     #     data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
     #     return data_set.targets
-
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)
@@ -666,6 +666,7 @@ class Plot:
         ax.scatter(dataset2d.data[:, 0], dataset2d.data[:, 1], c=dataset2d.targets, s=40, cmap=plt.cm.RdYlBu)
         plt.xlim(xx.min(), xx.max())
         plt.ylim(yy.min(), yy.max())
+        plt.show(block=self.useBlocking)
 
     def plot_image_grid(self, img_set, n_rows=4, n_cols=4, fig_size=(9, 9), pick_random=True, color_map='gray', seed=None):
         if seed:
@@ -695,6 +696,27 @@ class Plot:
             ax.axis('off')
         plt.show(block=self.useBlocking)
 
+    def plot_confusion_matrix(self, y_pred, y_true, class_names, title='Confusion matrix'):
+        """
+        - ref: https://scikit-learn.org/stable/auto_examples/model_selection/plot_confusion_matrix
+        """
+        from torchmetrics import ConfusionMatrix
+        from mlxtend.plotting import plot_confusion_matrix
+        y_pred, y_true = y_pred.cpu(), y_true.cpu()
+        # 2. Setup confusion matrix instance and compare predictions to targets
+        confmat = ConfusionMatrix(num_classes=len(class_names), task='multiclass')
+        confmat_tensor = confmat(preds=y_pred,
+                                 target=y_true)
+
+        # 3. Plot the confusion matrix
+        fig, ax = plot_confusion_matrix(
+            conf_mat=confmat_tensor.numpy(),  # matplotlib likes working with NumPy
+            class_names=class_names,  # turn the row and column labels into class names
+            figsize=(10, 7)
+        )
+        ax.set_title(title)
+        plt.show(block=self.useBlocking)
+
     def block(self):
         self.useBlocking = True
 
@@ -707,7 +729,7 @@ class Plot:
         plt.savefig(path, format='png')
 
     @staticmethod
-    def export_svg(path):
+    def export_svg(path=osp.join(util.get_platform_home_dir(), 'Desktop', 'plot.png')):
         os.makedirs(osp.dirname(path), exist_ok=True)
         plt.savefig(path, format='svg')
 

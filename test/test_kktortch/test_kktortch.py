@@ -126,7 +126,6 @@ def test_binary_classifier():
 def test_multiclass_classifier():
     from sklearn.datasets import make_blobs
     from sklearn.model_selection import train_test_split
-
     # Set the hyperparameters for data creation
     NUM_CLASSES = 4
     NUM_FEATURES = 2
@@ -230,7 +229,6 @@ def test_image_classifier():
             x = self.classifier(x)
             # print(x.shape)
             return x
-    # Setup training data
     train_data = ktc.retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST)
     test_data = ktc.retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST)
     ktc.inspect_dataset(train_data, block=False)
@@ -250,4 +248,6 @@ def test_image_classifier():
     plot.unblock()
     preds = classifier.predict(test_set)
     plot.plot_image_predictions(test_data, preds)
+    plot.plot_confusion_matrix(preds, test_set.targets, class_names=test_data.classes)
+    breakpoint()
     assert perf['accuracy'] > 0.6
