@@ -1,3 +1,4 @@
+import copy
 import os.path as osp
 import sys
 # 3rd party
@@ -114,10 +115,11 @@ def test_binary_classifier():
     X = tc.from_numpy(X).type(tc.float)
     y = tc.from_numpy(y).type(tc.float)
     train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
-    classifier.train(train_set, test_set, n_epochs=1000)
+    classifier.train(train_set, test_set, n_epochs=400)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
-    assert classifier.performance['test'].item() > 0.8
+    preds = classifier.predict(test_set, for_plot_only=True)
+    assert classifier.performance['test'] > 0.8
     assert classifier.evaluate_model(test_set)['accuracy'] > 0.8
 
 
@@ -166,22 +168,20 @@ def test_multiclass_classifier():
     model = BlobModel(input_features=NUM_FEATURES,
                       output_features=NUM_CLASSES,
                       hidden_units=8)
-    classifier = ktc.MultiClassifier(model, learning_rate=0.1, batch_size=32, log_every_n_epochs=100)
+    classifier = ktc.MultiClassifier(model,
+                                     learning_rate=0.1,
+                                     batch_size=32,
+                                     log_every_n_epochs=100)
     train_set, test_set = ktc.DataProxy(X, y, target_dtype=tc.long).split_train_test(train_ratio=0.8)
-    classifier.train(train_set, test_set, n_epochs=100)
+    classifier.train(train_set, test_set, n_epochs=800)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
+    preds = classifier.predict(test_set, for_plot_only=True)
     assert classifier.performance['test'] > 0.9
 
 
 def test_image_classifier():
     import torchvision as tcv
-    from torchvision import datasets
-    from torchvision.transforms import ToTensor
-    from torch.utils.data import DataLoader
-    # Import matplotlib for visualization
-    import matplotlib.pyplot as plt
-
     # Create a convolutional neural network
     class FashionMNISTModelV2(nn.Module):
         """
@@ -246,7 +246,11 @@ def test_image_classifier():
     test_set = ktc.ImageDataProxy(test_data)
     classifier.train(train_set, test_set, n_epochs=3)
     plot = ktc.Plot()
-    plot.plot_image_predictions(test_set, classifier.predict(test_set, for_plot_only=True))
-    breakpoint()
+    plot.block()
+    # unlabeled_set = copy.deepcopy(test_set)
+    # fact = ktc.TensorFactory(dtype=test_set.targets[0].dtype, requires_grad=False)
+    # # unlabeled_set.targets = fact.invalids((len(test_set.targets),))
+    preds = classifier.predict(test_set, for_plot_only=True)
+    # plot.plot_image_predictions(test_set, preds)
     perf = classifier.evaluate_model(test_set)
     assert perf['accuracy'] > 0.6

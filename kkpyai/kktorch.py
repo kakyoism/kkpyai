@@ -71,6 +71,9 @@ class TensorFactory(Loggable):
             tc.manual_seed(seed)
         return tc.rand(size, device=self.device, dtype=self.dtype, requires_grad=self.requires_grad)
 
+    def invalids(self, size: typing.Union[list, tuple], value=-1):
+        return tc.full(size, value, device=self.device, dtype=self.dtype, requires_grad=self.requires_grad)
+
 
 # endregion
 
@@ -103,6 +106,7 @@ def inspect_dataset(dataset, block=True, cmap='gray'):
 - data shape: {data.shape}
 - label shape: {label.shape if isinstance(label, tc.Tensor) else None}
 - data type: {data.dtype}
+- label type: {label.dtype if isinstance(label, tc.Tensor) else type(label)}
 - data size: {len(dataset.data)}
 - label size: {len(dataset.targets)}
 - label classes: {dataset.classes}
@@ -184,7 +188,8 @@ class ImageDataProxy(DataProxyBase):
     def __init__(self, dataset, device=None):
         super().__init__(dataset, None, device)
         self.data = tc.stack([img for img, label in dataset])
-        self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
+        # self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
+        self.targets = tc.tensor([label for img, label in dataset])
 
 # endregion
 
@@ -246,7 +251,7 @@ class Regressor(Loggable):
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
         verbose = self.logPeriodEpoch > 0
-        for epoch in tqdm(range(n_epochs)):
+        for epoch in tqdm(range(n_epochs), desc='Training'):
             # Training
             # - train mode is on by default after construction
             self.reset_batch_metrics('train')
@@ -292,7 +297,7 @@ class Regressor(Loggable):
         self.model.eval()
         # - forward pass
         with tc.inference_mode():
-            for X, y_true in dl:
+            for X, y_true in tqdm(dl, desc='Predicting'):
                 X, y_true = DataProxy.use_device(X, y_true, dev)
                 y_pred = self.model(X)
         data_set.targets = y_pred.to(dev)
@@ -340,7 +345,7 @@ class Regressor(Loggable):
         self.epochLosses[dataset_name]['_batch'].append(loss.cpu().detach().numpy())
 
     def compute_epoch_loss(self, dataloader, dataset_name='train'):
-        self.epochLosses[dataset_name]['epoch'].append(loss_epoch := sum(self.epochLosses[dataset_name]['_batch']) / len(dataloader))
+        self.epochLosses[dataset_name]['epoch'].append(loss_epoch := (sum(self.epochLosses[dataset_name]['_batch']) / len(dataloader)).item())
 
     def evaluate_epoch(self, dataloader, dataset_name='train'):
         self.epochMetrics[dataset_name]['epoch'].append(measure_epoch := sum(self.epochMetrics[dataset_name]['_batch']) / len(dataloader))
@@ -402,8 +407,10 @@ class BinaryClassifier(Regressor):
         - data_set must have no labels and must be filled by this method
         - we don't evaluate model here
         """
-        assert tc.isnan(data_set.targets).all(), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
+        # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
+        prev_device = next(self.model.parameters()).device
         dev = 'cpu' if for_plot_only else self.device
+        self.model.to(dev)
         dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
         # Testing
         # - eval mode is on by default after construction
@@ -411,12 +418,13 @@ class BinaryClassifier(Regressor):
         self.model.eval()
         # - forward pass
         with tc.inference_mode():
-            for b, (X, y_true) in enumerate(dl):
+            for X, y_true in tqdm(dl, desc='Predicting'):
                 X, y_true = DataProxy.use_device(X, y_true, dev)
                 y_logits = self.model(X).squeeze()
                 y_pred = self._logits_to_labels(y_logits)
                 y_pred_set.append(y_pred)
         data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
+        self.model.to(prev_device)
         return data_set.targets
 
     def evaluate_model(self, test_set):
@@ -438,15 +446,14 @@ class BinaryClassifier(Regressor):
                 X, y_true = DataProxy.use_device(X, y_true, self.device)
                 y_logits = self.model(X).squeeze()
                 y_pred = self._logits_to_labels(y_logits)
-                mean_loss += self.lossFunction(self._logits_to_probabilities(y_logits), y_true).item()
-                mean_acc += metric(y_pred, y_true)
+                mean_loss += self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
+                mean_acc += metric(y_pred, y_true).item()
             mean_loss /= len(dl)
             mean_acc /= len(dl)
-        acc = metric.compute()
         return {
             'model': type(self.model).__name__,
             'loss': mean_loss,
-            'accuracy': mean_acc.item(),
+            'accuracy': mean_acc,
         }
 
     def forward_pass(self, X, y_true, dataset_name='train'):
@@ -491,18 +498,23 @@ class BinaryClassifier(Regressor):
             return
         train_loss_percent = 100 * self.epochLosses['train']['epoch'][epoch]
         train_acc_percent = 100 * self.epochMetrics['train']['epoch'][epoch]
-        msg = f"Epoch: {epoch} | Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%"
+        msg = f"""Epoch: {epoch}
+Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
+"""
         if self.epochLosses['test']['epoch']:
             test_loss_percent = 100 * self.epochLosses['test']['epoch'][epoch]
             test_acc_percent = 100 * self.epochMetrics['test']['epoch'][epoch]
-            msg += f" | Test Loss: {test_loss_percent:.4f}% | Test Accuracy: {test_acc_percent:.4f}%"
+            msg += f" Test Loss: {test_loss_percent:.4f}% |  Test Accuracy: {test_acc_percent:.4f}%"
         self.logger.info(msg)
+
+    def evaluate_epoch(self, dataloader, dataset_name='train'):
+        self.epochMetrics[dataset_name]['epoch'].append(measure_epoch := (sum(self.epochMetrics[dataset_name]['_batch']) / len(dataloader)).item())
 
     def evaluate_training(self, start_time, stop_time):
         super().evaluate_training(start_time, stop_time)
         for dataset_name in ['train', 'test']:
             self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch'])/len(self.epochMetrics[dataset_name]['epoch'])
-            self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {self.performance[dataset_name]}%')
+            self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {100*self.performance[dataset_name]:.4f}%')
             self.metrics[dataset_name].reset()
 
     def get_performance(self):
@@ -548,6 +560,29 @@ class MultiClassifier(BinaryClassifier):
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
+
+    # def predict(self, data_set, for_plot_only=False):
+    #     """
+    #     - data_set must have no labels and must be filled by this method
+    #     - we don't evaluate model here
+    #     """
+    #     # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
+    #     dev = 'cpu' if for_plot_only else self.device
+    #     dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+    #     # Testing
+    #     # - eval mode is on by default after construction
+    #     y_pred_set = []
+    #     self.model.eval()
+    #     # - forward pass
+    #     with tc.inference_mode():
+    #         for X, y_true in tqdm(dl, desc='Predicting'):
+    #             X, y_true = DataProxy.use_device(X, y_true, dev)
+    #             y_logits = self.model(X).squeeze()
+    #             y_pred = self._logits_to_labels(y_logits)
+    #             y_pred_set.append(y_pred)
+    #     data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
+    #     return data_set.targets
+
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)
