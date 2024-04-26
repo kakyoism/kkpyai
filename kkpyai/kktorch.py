@@ -285,21 +285,18 @@ class Regressor(Loggable):
             self.plot_learning()
         return test_pred
 
-    def predict(self, data_set, for_plot_only=False):
+    def predict(self, data_set):
         """
         - data_set must have no labels
         """
-        dev = 'cpu' if for_plot_only else self.device
+        self.model.to(self.device)
         dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
-        # Testing
-        # - eval mode is on by default after construction
         self.model.eval()
-        # - forward pass
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = DataProxy.use_device(X, y_true, dev)
+                X, y_true = DataProxy.use_device(X, y_true, self.device)
                 y_pred = self.model(X)
-        data_set.targets = y_pred.to(dev)
+        data_set.targets = y_pred.to(self.device)
         return data_set.targets
 
     def evaluate_model(self, test_set):
@@ -401,29 +398,23 @@ class BinaryClassifier(Regressor):
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
 
-    def predict(self, data_set, for_plot_only=False):
+    def predict(self, data_set):
         """
         - data_set must have no labels and must be filled by this method
         - we don't evaluate model here
         """
         # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
-        prev_device = next(self.model.parameters()).device
-        dev = 'cpu' if for_plot_only else self.device
-        self.model.to(dev)
+        self.model.to(self.device)
         dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
-        # Testing
-        # - eval mode is on by default after construction
         y_pred_set = []
         self.model.eval()
-        # - forward pass
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = DataProxy.use_device(X, y_true, dev)
+                X, y_true = DataProxy.use_device(X, y_true, self.device)
                 y_logits = self.model(X).squeeze()
                 y_pred = self._logits_to_labels(y_logits)
                 y_pred_set.append(y_pred)
-        data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
-        self.model.to(prev_device)
+        data_set.targets = tc.cat(y_pred_set, dim=0).to(self.device)
         return data_set.targets
 
     def evaluate_model(self, test_set):
@@ -541,7 +532,9 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
             # - loss function requires that label be of the same size as data
             # - instead of using squeeze/unsqueeze, we initialize with dummy labels
             plot_set = DataProxy(X_plottable, tc.full((len(X_plottable),), float('nan')), target_dtype=tc.long, device='cpu')
-            y_pred = self.predict(plot_set, for_plot_only=True)
+            y_pred = self.predict(plot_set)
+            y_pred = y_pred.to("cpu")
+            # reset model device, dataset device has not changed
             self.model.to(self.device)
             return y_pred.reshape(xx.shape).detach().numpy()
 

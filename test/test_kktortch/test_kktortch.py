@@ -118,7 +118,7 @@ def test_binary_classifier():
     classifier.train(train_set, test_set, n_epochs=400)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
-    preds = classifier.predict(test_set, for_plot_only=True)
+    preds = classifier.predict(test_set)
     assert classifier.performance['test'] > 0.8
     assert classifier.evaluate_model(test_set)['accuracy'] > 0.8
 
@@ -176,7 +176,7 @@ def test_multiclass_classifier():
     classifier.train(train_set, test_set, n_epochs=800)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
-    preds = classifier.predict(test_set, for_plot_only=True)
+    preds = classifier.predict(test_set)
     assert classifier.performance['test'] > 0.9
 
 
@@ -250,7 +250,7 @@ def test_image_classifier():
     # unlabeled_set = copy.deepcopy(test_set)
     # fact = ktc.TensorFactory(dtype=test_set.targets[0].dtype, requires_grad=False)
     # # unlabeled_set.targets = fact.invalids((len(test_set.targets),))
-    preds = classifier.predict(test_set, for_plot_only=True)
+    preds = classifier.predict(test_set)
     # plot.plot_image_predictions(test_set, preds)
     perf = classifier.evaluate_model(test_set)
     assert perf['accuracy'] > 0.6
