@@ -188,8 +188,7 @@ class ImageDataProxy(DataProxyBase):
     def __init__(self, dataset, device=None):
         super().__init__(dataset, None, device)
         self.data = tc.stack([img for img, label in dataset])
-        # self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
-        self.targets = tc.tensor([label for img, label in dataset])
+        self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
 
 # endregion
 
