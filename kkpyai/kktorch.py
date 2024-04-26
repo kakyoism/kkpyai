@@ -679,7 +679,10 @@ class Plot:
             ax.axis('off')
         plt.show(block=self.useBlocking)
 
-    def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), pick_random=True, color_map='gray', seed=None):
+    def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), color_map='gray', pick_random=True, seed=None):
+        """
+        - img_set must be a torchvision dataset, not dataproxy
+        """
         if seed:
             tc.manual_seed(seed)
         fig, axes = plt.subplots(n_rows, n_cols, figsize=fig_size)
@@ -688,7 +691,7 @@ class Plot:
             img, label = img_set[p]
             pred = predictions[p]
             ax.imshow(img.squeeze(), cmap=color_map)
-            ax.set_title(f'Pred: {img_set.classes[pred]} -> Truth: {img_set.classes[label]}')
+            ax.set_title(f'Pred: {img_set.classes[pred]} -> Truth: {img_set.classes[label]}', c='g' if pred == label else 'r')
             ax.axis('off')
         plt.show(block=self.useBlocking)
 
