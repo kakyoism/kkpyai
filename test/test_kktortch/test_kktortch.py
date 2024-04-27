@@ -222,13 +222,7 @@ def test_image_classifier():
             )
 
         def forward(self, x: tc.Tensor):
-            x = self.block_1(x)
-            # print(x.shape)
-            x = self.block_2(x)
-            # print(x.shape)
-            x = self.classifier(x)
-            # print(x.shape)
-            return x
+            return self.classifier(self.block_2(self.block_1(x)))
     train_data = ktc.retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST)
     test_data = ktc.retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST)
     ktc.inspect_dataset(train_data, block=False)
@@ -249,5 +243,4 @@ def test_image_classifier():
     preds = classifier.predict(test_set)
     plot.plot_image_predictions(test_data, preds)
     plot.plot_confusion_matrix(preds, test_set.targets, class_names=test_data.classes)
-    breakpoint()
     assert perf['accuracy'] > 0.6
