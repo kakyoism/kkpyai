@@ -242,11 +242,11 @@ class Regressor(Loggable):
         start_time = perf_timer()
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
-        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch, num_workers=os.cpu_count())
+        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch)
         test_dl = None
         if test_set:
             # no need to shuffle test data
-            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
+            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
         # reset
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
@@ -291,7 +291,7 @@ class Regressor(Loggable):
         - data_set must have no labels
         """
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
         self.model.eval()
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
@@ -305,7 +305,7 @@ class Regressor(Loggable):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
         # Testing
         # - eval mode is on by default after construction
         mean_loss = 0
@@ -406,7 +406,7 @@ class BinaryClassifier(Regressor):
         """
         # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
         y_pred_set = []
         self.model.eval()
         with tc.inference_mode():
@@ -423,7 +423,7 @@ class BinaryClassifier(Regressor):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
         # Testing
         # - eval mode is on by default after construction
         n_classes = tc.unique(test_set.targets).shape[0]
