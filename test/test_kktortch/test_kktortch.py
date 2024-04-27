@@ -232,6 +232,7 @@ def test_image_classifier():
     model = FashionMNISTModelV2(input_shape=1,
                                 hidden_units=10,
                                 output_shape=len(train_data.classes))
+    ti.summary(model, input_size=(BATCH_SIZE, *train_data[0][0].shape))
     classifier = ktc.MultiClassifier(model,
                                      learning_rate=0.1,
                                      batch_size=BATCH_SIZE,
@@ -246,5 +247,4 @@ def test_image_classifier():
     preds = classifier.predict(test_set)
     plot.plot_image_predictions(test_data, preds)
     plot.plot_confusion_matrix(preds, test_set.targets, class_names=test_data.classes)
-    ti.summary(model, input_size=(BATCH_SIZE, clr_chan := 1, 28, 28))
     assert perf['accuracy'] > 0.6
