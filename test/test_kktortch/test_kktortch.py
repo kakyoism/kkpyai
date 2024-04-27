@@ -5,6 +5,7 @@ import sys
 import kkpyutil as util
 import torch as tc
 from torch import nn
+import torchinfo as ti
 
 # project
 _script_dir = osp.abspath(osp.dirname(__file__))
@@ -182,6 +183,8 @@ def test_multiclass_classifier():
 def test_image_classifier():
     import torchvision as tcv
     # Create a convolutional neural network
+    BATCH_SIZE = 32
+
     class FashionMNISTModelV2(nn.Module):
         """
         Model architecture copying TinyVGG from:
@@ -231,7 +234,7 @@ def test_image_classifier():
                                 output_shape=len(train_data.classes))
     classifier = ktc.MultiClassifier(model,
                                      learning_rate=0.1,
-                                     batch_size=32,
+                                     batch_size=BATCH_SIZE,
                                      log_every_n_epochs=100)
 
     train_set = ktc.ImageDataProxy(train_data)
@@ -243,4 +246,5 @@ def test_image_classifier():
     preds = classifier.predict(test_set)
     plot.plot_image_predictions(test_data, preds)
     plot.plot_confusion_matrix(preds, test_set.targets, class_names=test_data.classes)
+    ti.summary(model, input_size=(BATCH_SIZE, clr_chan := 1, 28, 28))
     assert perf['accuracy'] > 0.6
