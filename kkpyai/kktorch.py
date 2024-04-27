@@ -242,11 +242,11 @@ class Regressor(Loggable):
         start_time = perf_timer()
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
-        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch)
+        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch, num_workers=os.cpu_count())
         test_dl = None
         if test_set:
             # no need to shuffle test data
-            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
         # reset
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
@@ -291,7 +291,7 @@ class Regressor(Loggable):
         - data_set must have no labels
         """
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
         self.model.eval()
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
@@ -305,7 +305,7 @@ class Regressor(Loggable):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
         # Testing
         # - eval mode is on by default after construction
         mean_loss = 0
@@ -406,7 +406,7 @@ class BinaryClassifier(Regressor):
         """
         # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
         y_pred_set = []
         self.model.eval()
         with tc.inference_mode():
@@ -423,7 +423,7 @@ class BinaryClassifier(Regressor):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, num_workers=os.cpu_count())
         # Testing
         # - eval mode is on by default after construction
         n_classes = tc.unique(test_set.targets).shape[0]
@@ -558,28 +558,6 @@ class MultiClassifier(BinaryClassifier):
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
-
-    # def predict(self, data_set, for_plot_only=False):
-    #     """
-    #     - data_set must have no labels and must be filled by this method
-    #     - we don't evaluate model here
-    #     """
-    #     # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
-    #     dev = 'cpu' if for_plot_only else self.device
-    #     dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
-    #     # Testing
-    #     # - eval mode is on by default after construction
-    #     y_pred_set = []
-    #     self.model.eval()
-    #     # - forward pass
-    #     with tc.inference_mode():
-    #         for X, y_true in tqdm(dl, desc='Predicting'):
-    #             X, y_true = DataProxy.use_device(X, y_true, dev)
-    #             y_logits = self.model(X).squeeze()
-    #             y_pred = self._logits_to_labels(y_logits)
-    #             y_pred_set.append(y_pred)
-    #     data_set.targets = tc.cat(y_pred_set, dim=0).to(dev)
-    #     return data_set.targets
 
     def forward_pass(self, X, y_true, dataset_name='train'):
         y_logits = self.model(X)
