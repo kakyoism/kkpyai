@@ -511,6 +511,11 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
     def get_performance(self):
         return self.performance
 
+    def plot_learning(self):
+        self.plot.unblock()
+        self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
+        self.plot.plot_performance(self.epochMetrics['train']['epoch'], self.epochMetrics['test']['epoch'], type(self.metrics['train']).__name__)
+
     def plot_2d_predictions(self, train_set, test_set, predictions=None):
         """
         - assume 2D dataset (ds.data is [dim1, dim2]), plot decision boundaries
@@ -650,6 +655,18 @@ class Plot:
             ax.plot(test_losses, label='Testing Loss', color='orange')
         ax.set_title('Learning Curves')
         ax.set_ylabel("Loss")
+        ax.set_xlabel("Epochs")
+        ax.legend(prop=self.legendConfig['prop'])
+        plt.show(block=self.useBlocking)
+
+    def plot_performance(self, train_perfs, test_perfs=None, metric_name='Accuracy'):
+        fig, ax = plt.subplots(figsize=(10, 7))
+        if train_perfs is not None:
+            ax.plot(train_perfs, label=f'Training {metric_name}', color='blue')
+        if test_perfs is not None:
+            ax.plot(test_perfs, label=f'Testing {metric_name}', color='orange')
+        ax.set_title(f'Performance: {metric_name}')
+        ax.set_ylabel(metric_name)
         ax.set_xlabel("Epochs")
         ax.legend(prop=self.legendConfig['prop'])
         plt.show(block=self.useBlocking)
