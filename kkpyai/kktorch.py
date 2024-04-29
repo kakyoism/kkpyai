@@ -145,7 +145,7 @@ class DatasetFactory(Loggable):
         pass
 
 
-class ImageDatasetFactory(DatasetFactory):
+class ImageFolderDatasetFactory(DatasetFactory):
     def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
         super().__init__(root, transform, target_transform, logger)
 
@@ -156,28 +156,58 @@ class ImageDatasetFactory(DatasetFactory):
         return self.trainSet, self.testSet
 
 
-class DataProxyBase(tud.Dataset):
-    def __init__(self, data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
+class ImagePredictionDataset(tud.Dataset):
+    """
+    - for prediction on user unlabeled data, convert loose image files into a dataset
+    - loose files come with no labels
+    """
+    def __init__(self, files, transform=tcv.transforms.ToTensor()):
+        super().__init__()
+        self.files = files if isinstance(files, (list, tuple)) else [files]
+        self.transform = transform
+        img_data = []
+        for file in tqdm(self.files, desc='Converting images to dataset'):
+            img = tcv.io.read_image(file).type(tc.float32)
+            max_intensity = 255.0 if img.dtype == tc.uint8 else 1.0
+            img = img / max_intensity
+            if self.transform:
+                img = self.transform(img)
+            img_data.append(img)
+        self.data = tc.stack([img for img in img_data])
+        self.targets = tc.full((len(img_data),), tc.nan)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.targets[idx]
+
+
+class NumericDataset(tud.Dataset):
+    """
+    - data sources can be:
+      - loose data such as numpy arrays
+      - pytorch datasets
+      - real-world files
+    - regressors/classifiers accept only pytorch datasets, so for consistency user data must be converted to pytorch datasets
+    - this class deals with loose data for cases such as playgrounds and quick prototyping
+    - standard pytorch dataset can directly work with regressor/classifiers instead
+    """
+    def __init__(self, data, targets, data_dtype=tc.float32, target_dtype=tc.float32):
         """
         - initializes the dataset.
         - must instantiate train and test sets separately with this class
         - tc.Dataset offers train/test sets separately, so no split is needed
         - split_train_test() only works for loose data, e.g., tensors or numpy arrays
+        - we don't expose device here, because device pushing is context dependent, e.g., model vs. plotting
         """
         self.data = data
         self.targets = targets
-        # Check if the data is already a PyTorch dataset
-        self.isTorchDataset = isinstance(data, tud.Dataset)
-        if not self.isTorchDataset:
-            # Ensure data (numpy?) is a tensor for consistency
-            if not isinstance(data, tc.Tensor):
-                self.data = tc.tensor(data, dtype=data_dtype)
-            if targets is not None and not isinstance(targets, tc.Tensor):
-                self.targets = tc.tensor(targets, dtype=target_dtype)
-        if device:
-            self.data = self.data.to(device)
-            if self.targets is not None:
-                self.targets = self.targets.to(device)
+        # Ensure data (numpy?) is a tensor for consistency
+        if not isinstance(data, tc.Tensor):
+            self.data = tc.tensor(data, dtype=data_dtype)
+        if isinstance(targets, tc.Tensor):
+            self.targets = tc.tensor(targets, dtype=target_dtype)
 
     def __len__(self):
         return len(self.data)
@@ -188,43 +218,33 @@ class DataProxyBase(tud.Dataset):
         return item, target
 
     @staticmethod
-    def create(data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
+    def create(data, targets, data_dtype=tc.float32, target_dtype=tc.float32):
         import torchvision.datasets.vision as tdv
         if isinstance(data, tdv.VisionDataset):
-            return ImageDataProxy(data, device=device)
-        return DataProxy(data, targets, data_dtype, target_dtype, device)
+            return StdImageDataset(data)
+        return NumericDataset(data, targets, data_dtype, target_dtype)
 
     def split_train_test(self, train_ratio=0.8, random_seed=42):
         X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
-        return DataProxy(X_train, y_train), DataProxy(X_test, y_test)
+        return NumericDataset(X_train, y_train), NumericDataset(X_test, y_test)
 
     @staticmethod
     def use_device(X, y, device):
         return X.to(device), y.to(device)
 
 
-class DataProxy(DataProxyBase):
-    def __init__(self, data, targets, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
-        super().__init__(data, targets)
-        self.data = data
-        self.targets = targets
-        # Ensure data (numpy?) is a tensor for consistency
-        if not isinstance(data, tc.Tensor):
-            self.data = tc.tensor(data, dtype=data_dtype)
-        if targets is not None and not isinstance(targets, tc.Tensor):
-            self.targets = tc.tensor(targets, dtype=target_dtype)
-        if device:
-            self.data = self.data.to(device)
-            if self.targets is not None:
-                self.targets = self.targets.to(device)
-
-
-class ImageDataProxy(DataProxyBase):
-    def __init__(self, dataset, device=None):
-        super().__init__(dataset, None, device)
+class StdImageDataset(tud.Dataset):
+    def __init__(self, dataset):
         self.data = tc.stack([img for img, label in dataset])
         self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
 
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        target = self.targets[idx]
+        return item, target
 
 # endregion
 
@@ -234,16 +254,21 @@ class ImageDataProxy(DataProxyBase):
 class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=None, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
         super().__init__(logger)
         self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{loss_fn}Loss()') if isinstance(loss_fn, str) else loss_fn
+        self.transferLearn = transfer
+        if self.transferLearn:
+            self.logger.info('Freeze model parameters for transfer learning ...')
+            for param in self.model.parameters():
+                param.requires_grad = False
         self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
+        self.learningRate = learning_rate
         self.batchSize = batch_size
         self.shuffleBatchEveryEpoch = shuffle
         self.logPeriodEpoch = log_every_n_epochs
-        self.transferLearn = transfer
         # imp
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
@@ -269,14 +294,13 @@ class Regressor(Loggable):
         """
         self.optimizer = eval(f'tc.optim.{opt_name}(self.model.parameters(), lr={learning_rate})')
 
-    def train(self, train_set: DataProxy, test_set: DataProxy = None, n_epochs=1000, seed=42):
+    def train(self, train_set: tud.Dataset, test_set: tud.Dataset = None, n_epochs=1000, seed=42):
         """
-        - must call DataProxy(data, labels) or DataProxy(dataset: tc.Dataset) to create datasets first
+        - must call NumericDataset(data, labels) or NumericDataset(dataset: tc.Dataset) to create datasets first
+        - for transfer learning, must call self.transfer_learn() before calling this method
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
-        for param in self.model.parameters():
-            param.requires_grad = not self.transferLearn
         start_time = perf_timer()
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
@@ -294,7 +318,7 @@ class Regressor(Loggable):
             # - train mode is on by default after construction
             self.reset_batch_metrics('train')
             for batch, (X_train, y_train) in enumerate(train_dl):
-                X_train, y_train = DataProxy.use_device(X_train, y_train, self.device)
+                X_train, y_train = NumericDataset.use_device(X_train, y_train, self.device)
                 self.model.train()
                 train_pred, train_loss = self.forward_pass(X_train, y_train, 'train')
                 # - reset grad before backpropagation
@@ -311,7 +335,7 @@ class Regressor(Loggable):
                 with tc.inference_mode():
                     self.reset_batch_metrics('test')
                     for X_test, y_test in test_dl:
-                        X_test, y_test = DataProxy.use_device(X_test, y_test, self.device)
+                        X_test, y_test = NumericDataset.use_device(X_test, y_test, self.device)
                         test_pred, test_loss = self.forward_pass(X_test, y_test, 'test')
                     self.compute_epoch_loss(test_dl, 'test')
                     self.evaluate_epoch(test_dl, 'test')
@@ -329,13 +353,14 @@ class Regressor(Loggable):
         - data_set must have no labels
         """
         self.model.to(self.device)
+        y_preds = []
         dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         self.model.eval()
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = DataProxy.use_device(X, y_true, self.device)
-                y_pred = self.model(X)
-        data_set.targets = y_pred.to(self.device)
+                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                y_preds.append(self.model(X))
+        data_set.targets = tc.stack(y_preds).to(self.device)
         return data_set.targets
 
     def evaluate_model(self, test_set):
@@ -351,7 +376,7 @@ class Regressor(Loggable):
         # - forward pass
         with tc.inference_mode():
             for b, (X, y_true) in enumerate(dl):
-                X, y_true = DataProxy.use_device(X, y_true, self.device)
+                X, y_true = NumericDataset.use_device(X, y_true, self.device)
                 y_pred = self.model(X)
                 mean_loss += self.lossFunction(y_pred, y_true).item()
             mean_loss /= len(dl)
@@ -429,10 +454,23 @@ class Regressor(Loggable):
     def _compose_model_name(model_basename, ext):
         return osp.join(util.get_platform_appdata_dir(), 'torch', f'{model_basename}{ext}')
 
+    def transfer_learn(self, model_output_layer_factory, n_out_features):
+        """
+        - freeze model parameters for transfer learning
+        - make output layer compatible with custom dataset
+        """
+        self.logger.info('Freeze model parameters for transfer learning ...')
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.logger.info('Replace output layer for transfer learning ...')
+        self.model.classifier = model_output_layer_factory(n_out_features)
+        self.model.classifier.to(self.device)
+        self.optimizer = eval(f'tc.optim.{type(self.optimizer).__name__}(self.model.parameters(), lr={self.learningRate})')
+
 
 class BinaryClassifier(Regressor):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optm, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle,  device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
@@ -447,12 +485,14 @@ class BinaryClassifier(Regressor):
         dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         y_pred_set = []
         self.model.eval()
+        # model is trained at this point, so we can infer the output shape from the last layer
+        n_dims_label = 1 if list(self.model.modules())[-1].out_features == 1 else list(self.model.modules())[-1].out_features
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = DataProxy.use_device(X, y_true, self.device)
-                y_logits = self.model(X).squeeze()
-                y_pred = self._logits_to_labels(y_logits)
-                y_pred_set.append(y_pred)
+                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                # make output shape conform to multi-class dims
+                y_logits = self.model(X).squeeze().reshape(len(X), n_dims_label)
+                y_pred_set.append(self._logits_to_labels(y_logits))
         data_set.targets = tc.cat(y_pred_set, dim=0).to(self.device)
         return data_set.targets
 
@@ -470,10 +510,12 @@ class BinaryClassifier(Regressor):
         metric = tm.classification.Accuracy(task=task).to(self.device) if n_classes < 3 else tm.classification.Accuracy(task=task, num_classes=n_classes).to(self.device)
         self.model.eval()
         # - forward pass
+        n_dims_label = 1 if n_classes == 2 else n_classes
         with tc.inference_mode():
             for b, (X, y_true) in enumerate(dl):
-                X, y_true = DataProxy.use_device(X, y_true, self.device)
-                y_logits = self.model(X).squeeze()
+                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                # reshape to conform to multi-class dims
+                y_logits = self.model(X).squeeze().reshape(len(X), n_dims_label)
                 y_pred = self._logits_to_labels(y_logits)
                 mean_loss += self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
                 mean_acc += metric(y_pred, y_true).item()
@@ -488,12 +530,11 @@ class BinaryClassifier(Regressor):
     def forward_pass(self, X, y_true, dataset_name='train'):
         """
         - BCEWithLogitsLoss is not supported
-          - we don't support BCEWithLogitsLoss for consistency
-          - so that all loss functions can adopt an explicit activation function
+          - this is for all loss functions to adopt an explicit activation consistently
           - and BCEWithLogitsLoss requires no explicit activation because it builds in sigmoid
         """
-        # squeeze to remove extra `1` dimensions, this won't work unless model and data are on the same device
-        y_logits = self.model(X).squeeze()
+        # squeeze to remove extra `1` dimensions, and reshape to conform to multi-class dims
+        y_logits = self.model(X).squeeze().reshape(len(X), 1)
         # turn logits -> pred probs -> pred labels
         y_pred = self._logits_to_labels(y_logits)
         loss = self.lossFunction(self._logits_to_probabilities(y_logits), y_true)
@@ -508,6 +549,7 @@ class BinaryClassifier(Regressor):
         - logits -> pred probs -> pred labels
         - raw model output must be activated to get probabilities then labels
         - special activators, e.g., softmax, must override this method
+        -
         """
         return tc.round(BinaryClassifier._logits_to_probabilities(y_logits))
 
@@ -575,7 +617,7 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
             # Make predictions
             # - loss function requires that label be of the same size as data
             # - instead of using squeeze/unsqueeze, we initialize with dummy labels
-            plot_set = DataProxy(X_plottable, tc.full((len(X_plottable),), float('nan')), target_dtype=tc.long, device='cpu')
+            plot_set = NumericDataset(X_plottable, tc.full((len(X_plottable),), float('nan')), target_dtype=tc.long)
             y_pred = self.predict(plot_set)
             y_pred = y_pred.to("cpu")
             # reset model device, dataset device has not changed
@@ -591,8 +633,8 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
 
 
 class MultiClassifier(BinaryClassifier):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optm, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optimizer='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=None, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
@@ -618,6 +660,7 @@ class MultiClassifier(BinaryClassifier):
         - ref: https://github.com/mrdbourke/pytorch-deep-learning/discussions/314
         """
         dim_cls = 1
+        # dim_cls = 1 if y_logits.dim() > 1 else 0
         return tc.softmax(y_logits, dim=dim_cls)
 
     @staticmethod
@@ -636,6 +679,7 @@ class MultiClassifier(BinaryClassifier):
                 [ 0.2739,  1.7573, -0.9321,  1.2839]], device='mps:0',
         """
         dim_cls = 1
+        # dim_cls = 1 if y_logits.dim() > 1 else 0
         return tc.softmax(y_logits, dim=dim_cls).argmax(dim=dim_cls)
 
 

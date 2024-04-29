@@ -9,6 +9,7 @@ import torch as tc
 from torch import nn
 import torchinfo as ti
 import torchvision as tcv
+
 # project
 _script_dir = osp.abspath(osp.dirname(__file__))
 sys.path.insert(0, repo_root := osp.abspath(f'{_script_dir}/../../kkpyai'))
@@ -52,7 +53,7 @@ def test_plot_predictions():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
+    train_set, test_set = ktc.NumericDataset(X, y).split_train_test(train_ratio=0.8)
     with tc.inference_mode():
         y_preds = model(test_set.data)
     plot = ktc.Plot()
@@ -84,11 +85,12 @@ def test_regressor():
     start, end, step = 0, 1, 0.02
     X = tc.arange(start, end, step).unsqueeze(dim=1)
     y = weight * X + bias
-    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
+    train_set, test_set = ktc.NumericDataset(X, y).split_train_test(train_ratio=0.8)
     regressor = ktc.Regressor(model, loss_fn='MSE', optm='SGD', learning_rate=0.01, log_every_n_epochs=100)
     regressor.train(train_set, test_set, n_epochs=2000)
-    y_preds = regressor.predict(test_set)
-    assert tc.allclose(y_preds, test_set.targets, atol=0.1)
+    pred_set = copy.deepcopy(test_set)
+    y_preds = regressor.predict(pred_set)
+    assert tc.allclose(y_preds, pred_set.targets, atol=0.1)
     regressor.save('test_model')
     assert osp.isfile(mdl := osp.join(util.get_platform_appdata_dir(), 'torch', 'test_model.pth'))
     regressor.load('test_model')
@@ -116,12 +118,14 @@ def test_binary_classifier():
                         noise=0.03,  # a little bit of noise to the dots
                         random_state=42)  # keep a random state so we get the same values
     X = tc.from_numpy(X).type(tc.float)
-    y = tc.from_numpy(y).type(tc.float)
-    train_set, test_set = ktc.DataProxy(X, y).split_train_test(train_ratio=0.8)
+    # convert bin-class labels to multi-class label shapes for consistency
+    y = tc.from_numpy(y.reshape(len(y), 1)).type(tc.float)
+    train_set, test_set = ktc.NumericDataset(X, y).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=400)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
-    preds = classifier.predict(test_set)
+    pred_set = copy.deepcopy(test_set)
+    preds = classifier.predict(pred_set)
     assert classifier.performance['test'] > 0.8
     assert classifier.evaluate_model(test_set)['accuracy'] > 0.8
 
@@ -174,7 +178,7 @@ def test_multiclass_classifier():
                                      learning_rate=0.1,
                                      batch_size=32,
                                      log_every_n_epochs=100)
-    train_set, test_set = ktc.DataProxy(X, y, target_dtype=tc.long).split_train_test(train_ratio=0.8)
+    train_set, test_set = ktc.NumericDataset(X, y, target_dtype=tc.long).split_train_test(train_ratio=0.8)
     classifier.train(train_set, test_set, n_epochs=800)
     classifier.plot_2d_predictions(train_set, test_set)
     classifier.close_plot()
@@ -227,6 +231,7 @@ def test_image_classifier():
 
         def forward(self, x: tc.Tensor):
             return self.classifier(self.block_2(self.block_1(x)))
+
     train_data = ktc.retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST)
     test_data = ktc.retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST)
     ktc.inspect_dataset(train_data, block=False)
@@ -239,8 +244,8 @@ def test_image_classifier():
                                      batch_size=BATCH_SIZE,
                                      log_every_n_epochs=100)
 
-    train_set = ktc.ImageDataProxy(train_data)
-    test_set = ktc.ImageDataProxy(test_data)
+    train_set = ktc.StdImageDataset(train_data)
+    test_set = ktc.StdImageDataset(test_data)
     classifier.train(train_set, test_set, n_epochs=3)
     perf = classifier.evaluate_model(test_set)
     plot = ktc.Plot()
@@ -259,17 +264,56 @@ def test_transfer_learning():
     - predict a new image
     - experiment to refine the model using tensorboard
     """
+    def _create_model_output_layer(n_out_features):
+        return tc.nn.Sequential(
+            # avoid overfitting
+            # - Dropout layers randomly remove connections between two neural network layers with a probability of p
+            # - For example, if p=0.2, 20% of connections between neural network layers will be removed at random each pass
+            # - This practice is meant to help regularize (prevent overfitting) a model by making sure the connections that remain learn features to compensate for the removal of the other connections (hopefully these remaining features are more general).
+            tc.nn.Dropout(p=0.2, inplace=True),
+            tc.nn.Linear(in_features=1280, out_features=n_out_features)
+        )
     # lazy retrieve data
     pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi.zip')
     time.sleep(1)
     util.unzip_dir(pizza_steak_sushi_data, root := osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi'))
-    # create datasets
-    data_transform = tcv.transforms.Compose([
-        tcv.transforms.Resize((64, 64)),
-        tcv.transforms.ToTensor(),
-    ])
-    fact = ktc.ImageDatasetFactory(root, data_transform)
-    train_data, test_data = fact.create()
+    # create datasets:
+    # - make data conform to pre-trained model requirements
+    # - it usually comes with the model itself
+    # - manual example:
+    # data_transform = tcv.transforms.Compose([
+    #     tcv.transforms.Resize((224, 224)),
+    #     tcv.transforms.ToTensor(),
+    #     tcv.transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                              std=[0.229, 0.224, 0.225])
+    # ])
+    # initialize model
+    weights = tcv.models.EfficientNet_B0_Weights.DEFAULT
+    model = tcv.models.efficientnet_b0(weights=weights)
+    ti.summary(model, input_size=(32, 3, 224, 224),
+               col_names=("input_size", "output_size", "num_params", "trainable"),
+               col_width=20,
+               row_settings=['var_names'])
+    data_transform = weights.transforms()
+    train_data, test_data = ktc.ImageFolderDatasetFactory(root, data_transform).create()
     plt = ktc.Plot()
+    plt.unblock()
     plt.plot_image_grid(train_data)
-    pass
+    plt.close()
+    # create classifier
+    # after researching into the model with torchinfo, we update its output layer
+    model.classifier = tc.nn.Sequential(
+        # avoid overfitting
+        # - Dropout layers randomly remove connections between two neural network layers with a probability of p
+        # - For example, if p=0.2, 20% of connections between neural network layers will be removed at random each pass
+        # - This practice is meant to help regularize (prevent overfitting) a model by making sure the connections that remain learn features to compensate for the removal of the other connections (hopefully these remaining features are more general).
+        tc.nn.Dropout(p=0.2, inplace=True),
+        tc.nn.Linear(in_features=1280, out_features=len(train_data.classes))
+    )
+    classifier = ktc.MultiClassifier(model, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True)
+    classifier.transfer_learn(_create_model_output_layer, len(train_data.classes))
+    classifier.train(train_data, test_data, n_epochs=5)
+    test_img = util.lazy_download(osp.join(_gen_dir, '04-pizza-dad.jpeg'), url='https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/images/04-pizza-dad.jpeg')
+    pred_set = ktc.ImagePredictionDataset(test_img, data_transform)
+    y_pred = classifier.predict(pred_set)
+    assert train_data.classes[y_pred.argmax()] == 'pizza'
