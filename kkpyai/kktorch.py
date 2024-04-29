@@ -708,12 +708,15 @@ class Plot:
         for i, ax in enumerate(axes.flat):
             p = np.random.randint(0, len(img_set)) if pick_random else i
             img, label = img_set[p]
-            ax.imshow(img.squeeze(), cmap=color_map)
+            try:
+                ax.imshow(img.squeeze(), cmap=color_map)
+            except TypeError:
+                ax.imshow(img.permute(1, 2, 0).squeeze(), cmap=color_map)
             ax.set_title(img_set.classes[label])
             ax.axis('off')
         plt.show(block=self.useBlocking)
 
-    def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), color_map='gray', pick_random=True, seed=None):
+    def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), color_map=None, pick_random=True, seed=None):
         """
         - img_set must be a torchvision dataset, not dataproxy
         """
