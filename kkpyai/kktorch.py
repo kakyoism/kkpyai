@@ -549,7 +549,16 @@ class BinaryClassifier(Regressor):
         - logits -> pred probs -> pred labels
         - raw model output must be activated to get probabilities then labels
         - special activators, e.g., softmax, must override this method
-        -
+        - y_logits shape conforms to multi-class dimensions
+        - processing is always along the classes dimension (dim 1)
+        - y_logits example:
+          tensor([[-0.0489],
+            [-0.0626],
+            [-0.0139],
+            ...,
+            [-0.0590],
+            [-0.1200],
+            [-0.1053]], device='mps:0', grad_fn=<ViewBackward0>)
         """
         return tc.round(BinaryClassifier._logits_to_probabilities(y_logits))
 
@@ -660,7 +669,6 @@ class MultiClassifier(BinaryClassifier):
         - ref: https://github.com/mrdbourke/pytorch-deep-learning/discussions/314
         """
         dim_cls = 1
-        # dim_cls = 1 if y_logits.dim() > 1 else 0
         return tc.softmax(y_logits, dim=dim_cls)
 
     @staticmethod
@@ -679,7 +687,6 @@ class MultiClassifier(BinaryClassifier):
                 [ 0.2739,  1.7573, -0.9321,  1.2839]], device='mps:0',
         """
         dim_cls = 1
-        # dim_cls = 1 if y_logits.dim() > 1 else 0
         return tc.softmax(y_logits, dim=dim_cls).argmax(dim=dim_cls)
 
 
