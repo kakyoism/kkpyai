@@ -8,7 +8,7 @@ import kkpyutil as util
 import torch as tc
 from torch import nn
 import torchinfo as ti
-
+import torchvision as tcv
 # project
 _script_dir = osp.abspath(osp.dirname(__file__))
 sys.path.insert(0, repo_root := osp.abspath(f'{_script_dir}/../../kkpyai'))
@@ -183,7 +183,6 @@ def test_multiclass_classifier():
 
 
 def test_image_classifier():
-    import torchvision as tcv
     # Create a convolutional neural network
     BATCH_SIZE = 32
 
@@ -260,7 +259,17 @@ def test_transfer_learning():
     - predict a new image
     - experiment to refine the model using tensorboard
     """
+    # lazy retrieve data
     pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi.zip')
     time.sleep(1)
-    util.unzip_dir(pizza_steak_sushi_data, osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi'))
+    util.unzip_dir(pizza_steak_sushi_data, root := osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi'))
+    # create datasets
+    data_transform = tcv.transforms.Compose([
+        tcv.transforms.Resize((64, 64)),
+        tcv.transforms.ToTensor(),
+    ])
+    fact = ktc.ImageDatasetFactory(root, data_transform)
+    train_data, test_data = fact.create()
+    plt = ktc.Plot()
+    plt.plot_image_grid(train_data)
     pass

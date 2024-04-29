@@ -135,7 +135,7 @@ class DatasetFactory(Loggable):
         - APPDATA is the OS application data folder
         """
         super().__init__(logger)
-        self.root = osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
+        self.root = root if osp.isabs(root) else osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
         self.trainSet = None
         self.testSet = None
         self.transform = transform
