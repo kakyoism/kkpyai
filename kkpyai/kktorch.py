@@ -121,6 +121,41 @@ def inspect_dataset(dataset, block=True, cmap='gray'):
     plt.show(block=block)
 
 
+class DatasetFactory(Loggable):
+    """
+    - data come from either custom files or standard pytorch datasets
+    - use this class hierarchy for custom files, which:
+      - organizes data into a folder structure
+      - parse and wrap files into datasets using builtin like ImageFolder or custom functions
+    - for pytorch standard datasets, use retrieve_*_trainset() and retrieve_*_testset() instead
+    """
+    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+        """
+        - assume root is the top-level folder of structure: $APPDATA > torch > data > root > train/test > classes > files
+        - APPDATA is the OS application data folder
+        """
+        super().__init__(logger)
+        self.root = osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
+        self.trainSet = None
+        self.testSet = None
+        self.transform = transform
+        self.targetTransform = target_transform
+
+    def create(self):
+        pass
+
+
+class ImageDatasetFactory(DatasetFactory):
+    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+        super().__init__(root, transform, target_transform, logger)
+
+    def create(self):
+        self.trainSet = tcv.datasets.ImageFolder(osp.join(self.root, 'train'), transform=self.transform, target_transform=self.targetTransform)
+        # test data targets are ground truth and thus need no target transform
+        self.testSet = tcv.datasets.ImageFolder(osp.join(self.root, 'test'), transform=self.transform)
+        return self.trainSet, self.testSet
+
+
 class DataProxyBase(tud.Dataset):
     def __init__(self, data, targets=None, data_dtype=tc.float32, target_dtype=tc.float32, device=None):
         """
@@ -199,7 +234,7 @@ class ImageDataProxy(DataProxyBase):
 class Regressor(Loggable):
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=None, log_every_n_epochs=0):
         super().__init__(logger)
         self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
@@ -208,6 +243,7 @@ class Regressor(Loggable):
         self.batchSize = batch_size
         self.shuffleBatchEveryEpoch = shuffle
         self.logPeriodEpoch = log_every_n_epochs
+        self.transferLearn = transfer
         # imp
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
@@ -239,14 +275,16 @@ class Regressor(Loggable):
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
+        for param in self.model.parameters():
+            param.requires_grad = not self.transferLearn
         start_time = perf_timer()
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
-        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch)
+        train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch, pin_memory=True)
         test_dl = None
         if test_set:
             # no need to shuffle test data
-            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+            test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         # reset
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
@@ -291,7 +329,7 @@ class Regressor(Loggable):
         - data_set must have no labels
         """
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         self.model.eval()
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
@@ -305,7 +343,7 @@ class Regressor(Loggable):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         # Testing
         # - eval mode is on by default after construction
         mean_loss = 0
@@ -406,7 +444,7 @@ class BinaryClassifier(Regressor):
         """
         # assert tc.all(data_set.targets==-1), f'Expect dataset to contain no ground truth (all NaN), but got: {data_set.targets}'
         self.model.to(self.device)
-        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(data_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         y_pred_set = []
         self.model.eval()
         with tc.inference_mode():
@@ -423,7 +461,7 @@ class BinaryClassifier(Regressor):
         - test_set must have labels
         """
         assert len(test_set.targets) > 0, 'Test-set must contain ground truth'
-        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False)
+        dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         # Testing
         # - eval mode is on by default after construction
         n_classes = tc.unique(test_set.targets).shape[0]

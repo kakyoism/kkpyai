@@ -763,14 +763,14 @@ files = [
 
 [[package]]
 name = "kkpyutil"
-version = "1.33.6"
+version = "1.34.0"
 description = "Building blocks for sysadmin and DevOps"
 category = "main"
 optional = false
 python-versions = "<4.0,>=3.9"
 files = [
-    {file = "kkpyutil-1.33.6-py3-none-any.whl", hash = "sha256:4a14ed10dcb57b0eeb966603b6d0843935983a3537cef9dda1aee3771ccca973"},
-    {file = "kkpyutil-1.33.6.tar.gz", hash = "sha256:4f9cce2f7d814892c0bb23ecf5129a29fae834b6605c70eec918af15ddf2f99f"},
+    {file = "kkpyutil-1.34.0-py3-none-any.whl", hash = "sha256:aad975d16d46cc1934f63c92b49a002d462fefcdba0a13308c12ed3399972ed6"},
+    {file = "kkpyutil-1.34.0.tar.gz", hash = "sha256:457db49e468857f4b06d18540c691f532dceaeba3e328f3383db78156daaaf6f"},
 ]
 
 [[package]]
@@ -1637,24 +1637,24 @@ diagrams = ["jinja2", "railroad-diagrams"]
 
 [[package]]
 name = "pytest"
-version = "8.1.2"
+version = "8.2.0"
 description = "pytest: simple powerful testing with Python"
 category = "dev"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pytest-8.1.2-py3-none-any.whl", hash = "sha256:6c06dc309ff46a05721e6fd48e492a775ed8165d2ecdf57f156a80c7e95bb142"},
-    {file = "pytest-8.1.2.tar.gz", hash = "sha256:f3c45d1d5eed96b01a2aea70dee6a4a366d51d38f9957768083e4fecfc77f3ef"},
+    {file = "pytest-8.2.0-py3-none-any.whl", hash = "sha256:1733f0620f6cda4095bbf0d9ff8022486e91892245bb9e7d5542c018f612f233"},
+    {file = "pytest-8.2.0.tar.gz", hash = "sha256:d507d4482197eac0ba2bae2e9babf0672eb333017bcedaa5fb1a3d42c1174b3f"},
 ]
 
 [package.dependencies]
 colorama = {version = "*", markers = "sys_platform == \"win32\""}
 iniconfig = "*"
 packaging = "*"
-pluggy = ">=1.4,<2.0"
+pluggy = ">=1.5,<2.0"
 
 [package.extras]
-testing = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "pygments (>=2.7.2)", "requests", "setuptools", "xmlschema"]
+dev = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "pygments (>=2.7.2)", "requests", "setuptools", "xmlschema"]
 
 [[package]]
 name = "python-dateutil"

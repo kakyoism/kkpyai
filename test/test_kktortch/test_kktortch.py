@@ -1,6 +1,8 @@
 import copy
 import os.path as osp
 import sys
+import time
+
 # 3rd party
 import kkpyutil as util
 import torch as tc
@@ -248,3 +250,17 @@ def test_image_classifier():
     plot.plot_image_predictions(test_data, preds)
     plot.plot_confusion_matrix(preds, test_set.targets, class_names=test_data.classes)
     assert perf['accuracy'] > 0.6
+
+
+def test_transfer_learning():
+    """
+    - create dataset using local data
+    - download a pre-trained model
+    - train the model on the local data
+    - predict a new image
+    - experiment to refine the model using tensorboard
+    """
+    pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi.zip')
+    time.sleep(1)
+    util.unzip_dir(pizza_steak_sushi_data, osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi'))
+    pass
