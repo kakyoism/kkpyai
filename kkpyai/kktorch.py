@@ -81,19 +81,6 @@ class TensorFactory(Loggable):
 # region dataset
 
 
-def retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST, local_dir=osp.join(util.get_platform_appdata_dir(), 'torch'), transform=tcv.transforms.ToTensor(), target_transform=None):
-    """
-    - FashionMNIST is a drop-in replacement for MNIST
-    - images come as PIL format, we want to turn into Torch tensors
-    - ref: https://pytorch.org/vision/stable/datasets.html#fashion-mnist
-    """
-    return data_cls(local_dir, train=True, download=True, transform=transform, target_transform=target_transform)
-
-
-def retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST, local_dir=osp.join(util.get_platform_appdata_dir(), 'torch'), transform=tcv.transforms.ToTensor(), target_transform=None):
-    return data_cls(local_dir, train=False, download=True, transform=transform, target_transform=target_transform)
-
-
 def inspect_dataset(dataset, block=True, cmap='gray'):
     """
     - list key dataset properties for debug, e.g.,
@@ -123,40 +110,95 @@ def inspect_dataset(dataset, block=True, cmap='gray'):
 
 class DatasetFactory(Loggable):
     """
+    - ML needs training and testing sets to complete model training and evaluation
+    - factories are a high-level abstraction that creates these datasets as a complete bundle
+    - they depend on the dataset abstraction that creates individual datasets
     - data come from either custom files or standard pytorch datasets
     - use this class hierarchy for custom files, which:
       - organizes data into a folder structure
       - parse and wrap files into datasets using builtin like ImageFolder or custom functions
     - for pytorch standard datasets, use retrieve_*_trainset() and retrieve_*_testset() instead
     """
-    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+    def __init__(self, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
         """
         - assume root is the top-level folder of structure: $APPDATA > torch > data > root > train/test > classes > files
         - APPDATA is the OS application data folder
         """
         super().__init__(logger)
-        self.root = root if osp.isabs(root) else osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
         self.trainSet = None
         self.testSet = None
-        self.transform = transform
+        self.dataTransform = transform
         self.targetTransform = target_transform
 
     def create(self):
-        pass
+        raise NotImplementedError('subclass this!')
 
 
-class ImageFolderDatasetFactory(DatasetFactory):
+class StdDatasetFactory(DatasetFactory):
+    """
+    - for standard pytorch datasets, use this factory
+    - this factory is a thin wrapper around standard pytorch datasets
+    """
+    def __init__(self, data_cls=tcv.datasets.FashionMNIST, local_dir=osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data'), transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+        super().__init__(transform, target_transform, logger)
+        self.dataCls = data_cls
+        self.localDir = local_dir
+
+    def create(self):
+        self.trainSet = self.dataCls(self.localDir, train=True, download=True, transform=self.dataTransform, target_transform=self.targetTransform)
+        self.testSet = self.dataCls(self.localDir, train=False, download=True, transform=self.dataTransform, target_transform=self.targetTransform)
+        return self.trainSet, self.testSet
+
+
+class StdImageSetFactory(StdDatasetFactory):
+    def __init__(self, data_cls=tcv.datasets.ImageFolder, local_dir=osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data'), transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+        super().__init__(data_cls, local_dir, transform, target_transform, logger)
+
+
+class FolderDatasetFactory(DatasetFactory):
+    """
+    - assume root is the top-level folder of structure: root > train/test > classes > files
+    """
+    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+        super().__init__(transform, target_transform, logger)
+        self.root = root if osp.isabs(root) else osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
+        assert osp.isdir(self.root), f'Missing root folder: {self.root}'
+
+    def create(self):
+        raise NotImplementedError('subclass this!')
+
+
+class ImageFolderDatasetFactory(FolderDatasetFactory):
     def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
         super().__init__(root, transform, target_transform, logger)
 
     def create(self):
-        self.trainSet = tcv.datasets.ImageFolder(osp.join(self.root, 'train'), transform=self.transform, target_transform=self.targetTransform)
+        self.trainSet = tcv.datasets.ImageFolder(osp.join(self.root, 'train'), transform=self.dataTransform, target_transform=self.targetTransform)
         # test data targets are ground truth and thus need no target transform
-        self.testSet = tcv.datasets.ImageFolder(osp.join(self.root, 'test'), transform=self.transform)
+        self.testSet = tcv.datasets.ImageFolder(osp.join(self.root, 'test'), transform=self.dataTransform)
         return self.trainSet, self.testSet
 
 
-class ImagePredictionDataset(tud.Dataset):
+class CustomDatasetBase(tud.Dataset):
+    """
+    - base class for custom datasets
+    """
+    def __init__(self):
+        self.data = tc.tensor([])
+        self.targets = tc.tensor([])
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.targets[idx]
+
+    @staticmethod
+    def use_device(X, y, device):
+        return X.to(device), y.to(device)
+
+
+class ImagePredictionDataset(CustomDatasetBase):
     """
     - for prediction on user unlabeled data, convert loose image files into a dataset
     - loose files come with no labels
@@ -176,14 +218,8 @@ class ImagePredictionDataset(tud.Dataset):
         self.data = tc.stack([img for img in img_data])
         self.targets = tc.full((len(img_data),), tc.nan)
 
-    def __len__(self):
-        return len(self.data)
 
-    def __getitem__(self, idx):
-        return self.data[idx], self.targets[idx]
-
-
-class NumericDataset(tud.Dataset):
+class NumericDataset(CustomDatasetBase):
     """
     - data sources can be:
       - loose data such as numpy arrays
@@ -201,6 +237,7 @@ class NumericDataset(tud.Dataset):
         - split_train_test() only works for loose data, e.g., tensors or numpy arrays
         - we don't expose device here, because device pushing is context dependent, e.g., model vs. plotting
         """
+        super().__init__()
         self.data = data
         self.targets = targets
         # Ensure data (numpy?) is a tensor for consistency
@@ -209,42 +246,21 @@ class NumericDataset(tud.Dataset):
         if isinstance(targets, tc.Tensor):
             self.targets = tc.tensor(targets, dtype=target_dtype)
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        target = self.targets[idx]
-        return item, target
-
-    @staticmethod
-    def create(data, targets, data_dtype=tc.float32, target_dtype=tc.float32):
-        import torchvision.datasets.vision as tdv
-        if isinstance(data, tdv.VisionDataset):
-            return StdImageDataset(data)
-        return NumericDataset(data, targets, data_dtype, target_dtype)
-
     def split_train_test(self, train_ratio=0.8, random_seed=42):
         X_train, X_test, y_train, y_test = train_test_split(self.data, self.targets, train_size=train_ratio, random_state=random_seed)
         return NumericDataset(X_train, y_train), NumericDataset(X_test, y_test)
 
-    @staticmethod
-    def use_device(X, y, device):
-        return X.to(device), y.to(device)
 
-
-class StdImageDataset(tud.Dataset):
+class StdImageDataset(CustomDatasetBase):
+    """
+    - FashionMNIST is a drop-in replacement for MNIST
+    - images come as PIL format, we want to turn into Torch tensors
+    - ref: https://pytorch.org/vision/stable/datasets.html#fashion-mnist
+    """
     def __init__(self, dataset):
+        super().__init__()
         self.data = tc.stack([img for img, label in dataset])
         self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        target = self.targets[idx]
-        return item, target
 
 # endregion
 
@@ -318,7 +334,7 @@ class Regressor(Loggable):
             # - train mode is on by default after construction
             self.reset_batch_metrics('train')
             for batch, (X_train, y_train) in enumerate(train_dl):
-                X_train, y_train = NumericDataset.use_device(X_train, y_train, self.device)
+                X_train, y_train = CustomDatasetBase.use_device(X_train, y_train, self.device)
                 self.model.train()
                 train_pred, train_loss = self.forward_pass(X_train, y_train, 'train')
                 # - reset grad before backpropagation
@@ -335,7 +351,7 @@ class Regressor(Loggable):
                 with tc.inference_mode():
                     self.reset_batch_metrics('test')
                     for X_test, y_test in test_dl:
-                        X_test, y_test = NumericDataset.use_device(X_test, y_test, self.device)
+                        X_test, y_test = CustomDatasetBase.use_device(X_test, y_test, self.device)
                         test_pred, test_loss = self.forward_pass(X_test, y_test, 'test')
                     self.compute_epoch_loss(test_dl, 'test')
                     self.evaluate_epoch(test_dl, 'test')
@@ -358,7 +374,7 @@ class Regressor(Loggable):
         self.model.eval()
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                X, y_true = CustomDatasetBase.use_device(X, y_true, self.device)
                 y_preds.append(self.model(X))
         data_set.targets = tc.stack(y_preds).to(self.device)
         return data_set.targets
@@ -376,7 +392,7 @@ class Regressor(Loggable):
         # - forward pass
         with tc.inference_mode():
             for b, (X, y_true) in enumerate(dl):
-                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                X, y_true = CustomDatasetBase.use_device(X, y_true, self.device)
                 y_pred = self.model(X)
                 mean_loss += self.lossFunction(y_pred, y_true).item()
             mean_loss /= len(dl)
@@ -489,7 +505,7 @@ class BinaryClassifier(Regressor):
         n_dims_label = 1 if list(self.model.modules())[-1].out_features == 1 else list(self.model.modules())[-1].out_features
         with tc.inference_mode():
             for X, y_true in tqdm(dl, desc='Predicting'):
-                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                X, y_true = CustomDatasetBase.use_device(X, y_true, self.device)
                 # make output shape conform to multi-class dims
                 y_logits = self.model(X).squeeze().reshape(len(X), n_dims_label)
                 y_pred_set.append(self._logits_to_labels(y_logits))
@@ -513,7 +529,7 @@ class BinaryClassifier(Regressor):
         n_dims_label = 1 if n_classes == 2 else n_classes
         with tc.inference_mode():
             for b, (X, y_true) in enumerate(dl):
-                X, y_true = NumericDataset.use_device(X, y_true, self.device)
+                X, y_true = CustomDatasetBase.use_device(X, y_true, self.device)
                 # reshape to conform to multi-class dims
                 y_logits = self.model(X).squeeze().reshape(len(X), n_dims_label)
                 y_pred = self._logits_to_labels(y_logits)

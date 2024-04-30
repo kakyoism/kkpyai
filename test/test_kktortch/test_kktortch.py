@@ -232,8 +232,7 @@ def test_image_classifier():
         def forward(self, x: tc.Tensor):
             return self.classifier(self.block_2(self.block_1(x)))
 
-    train_data = ktc.retrieve_vision_trainset(data_cls=tcv.datasets.FashionMNIST)
-    test_data = ktc.retrieve_vision_testset(data_cls=tcv.datasets.FashionMNIST)
+    train_data, test_data = ktc.StdImageSetFactory(tcv.datasets.FashionMNIST).create()
     ktc.inspect_dataset(train_data, block=False)
     model = FashionMNISTModelV2(input_shape=1,
                                 hidden_units=10,
@@ -243,7 +242,6 @@ def test_image_classifier():
                                      learning_rate=0.1,
                                      batch_size=BATCH_SIZE,
                                      log_every_n_epochs=100)
-
     train_set = ktc.StdImageDataset(train_data)
     test_set = ktc.StdImageDataset(test_data)
     classifier.train(train_set, test_set, n_epochs=3)
