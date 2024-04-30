@@ -3,6 +3,8 @@ import operator
 import os
 import os.path as osp
 import pprint as pp
+import shutil
+import time
 import typing
 # 3rd party
 import kkpyutil as util
@@ -15,6 +17,12 @@ import torch.utils.data as tud
 import torchmetrics as tm
 import torchvision as tcv
 from tqdm.auto import tqdm
+
+USER_DATA_ROOT = osp.abspath(f'{util.get_platform_appdata_dir()}/torch')
+MODEL_DIR = osp.join(USER_DATA_ROOT, 'model')
+DATASET_DIR = osp.join(USER_DATA_ROOT, 'data')
+PROFILE_DIR = osp.join(USER_DATA_ROOT, 'profile')
+_logger = util.build_default_logger(osp.join(USER_DATA_ROOT, 'log'), 'torch')
 
 
 # region globals
@@ -31,8 +39,8 @@ def probe_fast_device():
 
 
 class Loggable:
-    def __init__(self, logger=None):
-        self.logger = logger or util.glogger
+    def __init__(self, logger=_logger):
+        self.logger = logger
 
 
 # endregion
@@ -41,7 +49,7 @@ class Loggable:
 # region tensor ops
 
 class TensorFactory(Loggable):
-    def __init__(self, device=None, dtype=tc.float32, requires_grad=False, logger=None):
+    def __init__(self, device=None, dtype=tc.float32, requires_grad=False, logger=_logger):
         super().__init__(logger)
         self.device = tc.device(device) if device else probe_fast_device()
         self.dtype = dtype
@@ -119,7 +127,8 @@ class DatasetFactory(Loggable):
       - parse and wrap files into datasets using builtin like ImageFolder or custom functions
     - for pytorch standard datasets, use retrieve_*_trainset() and retrieve_*_testset() instead
     """
-    def __init__(self, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+
+    def __init__(self, transform=tcv.transforms.ToTensor(), target_transform=None, logger=_logger):
         """
         - assume root is the top-level folder of structure: $APPDATA > torch > data > root > train/test > classes > files
         - APPDATA is the OS application data folder
@@ -139,7 +148,8 @@ class StdDatasetFactory(DatasetFactory):
     - for standard pytorch datasets, use this factory
     - this factory is a thin wrapper around standard pytorch datasets
     """
-    def __init__(self, data_cls=tcv.datasets.FashionMNIST, local_dir=osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data'), transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+
+    def __init__(self, data_cls=tcv.datasets.FashionMNIST, local_dir=DATASET_DIR, transform=tcv.transforms.ToTensor(), target_transform=None, logger=_logger):
         super().__init__(transform, target_transform, logger)
         self.dataCls = data_cls
         self.localDir = local_dir
@@ -151,7 +161,7 @@ class StdDatasetFactory(DatasetFactory):
 
 
 class StdImageSetFactory(StdDatasetFactory):
-    def __init__(self, data_cls=tcv.datasets.ImageFolder, local_dir=osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data'), transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+    def __init__(self, data_cls=tcv.datasets.ImageFolder, local_dir=DATASET_DIR, transform=tcv.transforms.ToTensor(), target_transform=None, logger=_logger):
         super().__init__(data_cls, local_dir, transform, target_transform, logger)
 
 
@@ -159,9 +169,10 @@ class FolderDatasetFactory(DatasetFactory):
     """
     - assume root is the top-level folder of structure: root > train/test > classes > files
     """
-    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+
+    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=_logger):
         super().__init__(transform, target_transform, logger)
-        self.root = root if osp.isabs(root) else osp.abspath(f'{util.get_platform_appdata_dir()}/torch/data/{root}')
+        self.root = root if osp.isabs(root) else osp.join(DATASET_DIR, root)
         assert osp.isdir(self.root), f'Missing root folder: {self.root}'
 
     def create(self):
@@ -169,7 +180,7 @@ class FolderDatasetFactory(DatasetFactory):
 
 
 class ImageFolderDatasetFactory(FolderDatasetFactory):
-    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=None):
+    def __init__(self, root, transform=tcv.transforms.ToTensor(), target_transform=None, logger=_logger):
         super().__init__(root, transform, target_transform, logger)
 
     def create(self):
@@ -183,6 +194,7 @@ class CustomDatasetBase(tud.Dataset):
     """
     - base class for custom datasets
     """
+
     def __init__(self):
         self.data = tc.tensor([])
         self.targets = tc.tensor([])
@@ -203,6 +215,7 @@ class ImagePredictionDataset(CustomDatasetBase):
     - for prediction on user unlabeled data, convert loose image files into a dataset
     - loose files come with no labels
     """
+
     def __init__(self, files, transform=tcv.transforms.ToTensor()):
         super().__init__()
         self.files = files if isinstance(files, (list, tuple)) else [files]
@@ -229,6 +242,7 @@ class NumericDataset(CustomDatasetBase):
     - this class deals with loose data for cases such as playgrounds and quick prototyping
     - standard pytorch dataset can directly work with regressor/classifiers instead
     """
+
     def __init__(self, data, targets, data_dtype=tc.float32, target_dtype=tc.float32):
         """
         - initializes the dataset.
@@ -257,10 +271,12 @@ class StdImageDataset(CustomDatasetBase):
     - images come as PIL format, we want to turn into Torch tensors
     - ref: https://pytorch.org/vision/stable/datasets.html#fashion-mnist
     """
+
     def __init__(self, dataset):
         super().__init__()
         self.data = tc.stack([img for img, label in dataset])
         self.targets = tc.tensor([label for img, label in dataset], dtype=tc.long)
+
 
 # endregion
 
@@ -268,10 +284,42 @@ class StdImageDataset(CustomDatasetBase):
 # region model
 
 class Regressor(Loggable):
+    """
+    - model.name should contain a task/goal identifier for experiment-based profiling
+    """
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optm='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0):
         super().__init__(logger)
+
+        def _create_profiler():
+            """
+            - pattern: profile_dir > task > timestamp > experiment-model
+            - experiment: the name of this ctor's caller, i.e., create a function/method to represent an experiment
+            - write docstring for the caller as the experiment description
+            - model.name: task name
+            - typical scenario: for a given task, run several models with different hyperparameters, then show the profile in tensorboard
+            """
+            from datetime import datetime
+            import inspect
+            from torch.utils.tensorboard import SummaryWriter
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            caller_frame = inspect.stack()[1]
+            # Get the caller's frame object
+            caller_frame_object = caller_frame.frame
+            # Get the name of the caller function or method
+            caller_name = caller_frame_object.f_code.co_name
+            # Get the caller's module name
+            caller_module_name = caller_frame_object.f_globals["__name__"]
+            # Import the module
+            caller_module = __import__(caller_module_name)
+            # Get the caller function or method object using getattr. This might need adjustment
+            # if the caller is a method of a class.
+            caller_function = getattr(caller_module, caller_name)
+            docstr = caller_function.__doc__
+            prof_dir = osp.join(PROFILE_DIR, timestamp, f'{caller_frame.function}-{type(model).__name__}')
+            return SummaryWriter(log_dir=prof_dir, comment=docstr)
+
         self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
         self.lossFunction = eval(f'tc.nn.{loss_fn}Loss()') if isinstance(loss_fn, str) else loss_fn
@@ -280,7 +328,7 @@ class Regressor(Loggable):
             self.logger.info('Freeze model parameters for transfer learning ...')
             for param in self.model.parameters():
                 param.requires_grad = False
-        self.optimizer = eval(f'tc.optim.{optm}(self.model.parameters(), lr={learning_rate})')
+        self.optimizer = eval(f'tc.optim.{optimizer}(self.model.parameters(), lr={learning_rate})')
         self.learningRate = learning_rate
         self.batchSize = batch_size
         self.shuffleBatchEveryEpoch = shuffle
@@ -289,6 +337,7 @@ class Regressor(Loggable):
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
         self.plot = Plot()
+        self.profiler = _create_profiler()
 
     @staticmethod
     def init_epoch_metric():
@@ -326,6 +375,7 @@ class Regressor(Loggable):
             # no need to shuffle test data
             test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         # reset
+        self.profile_model_arch(train_set)
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
         verbose = self.logPeriodEpoch > 0
@@ -357,7 +407,9 @@ class Regressor(Loggable):
                     self.evaluate_epoch(test_dl, 'test')
             if verbose:
                 self.log_epoch(epoch)
+            self.profile_latest_epoch()
         stop_time = perf_timer()
+        self.profiler.close()
         # final test predictions
         self.evaluate_training(start_time, stop_time)
         if verbose:
@@ -400,6 +452,24 @@ class Regressor(Loggable):
             'model': type(self.model).__name__,
             'loss': mean_loss,
         }
+
+    def profile_model_arch(self, dataset):
+        data, target = dataset[0]
+        self.profiler.add_graph(model=self.model,
+                                input_to_model=data.unsqueeze(0).to(self.device))
+
+    def profile_latest_epoch(self):
+        epoch = len(self.epochLosses['train']['epoch']) - 1
+        self.profiler.add_scalars(main_tag="Loss",
+                                  tag_scalar_dict={"trainLoss": self.epochLosses['train']['epoch'][epoch],
+                                                   "testLoss": self.epochLosses['test']['epoch'][epoch]},
+                                  global_step=epoch)
+
+        # Add accuracy results to SummaryWriter
+        self.profiler.add_scalars(main_tag="Accuracy",
+                                  tag_scalar_dict={"trainAcc": self.epochMetrics['train']['epoch'][epoch],
+                                                   "testAcc": self.epochMetrics['test']['epoch'][epoch]},
+                                  global_step=epoch)
 
     def plot_learning(self):
         """
@@ -455,20 +525,20 @@ class Regressor(Loggable):
     def close_plot(self):
         self.plot.close()
 
-    def save(self, model_basename=None, optimized=True):
+    def save_model(self, model_basename=None, optimized=True):
         ext = '.pth' if optimized else '.pt'
         path = self._compose_model_name(model_basename, ext)
         os.makedirs(osp.dirname(path), exist_ok=True)
         tc.save(self.model.state_dict(), path)
 
-    def load(self, model_basename=None, optimized=True):
+    def load_model(self, model_basename=None, optimized=True):
         ext = '.pth' if optimized else '.pt'
         path = self._compose_model_name(model_basename, ext)
         self.model.load_state_dict(tc.load(path))
 
     @staticmethod
     def _compose_model_name(model_basename, ext):
-        return osp.join(util.get_platform_appdata_dir(), 'torch', f'{model_basename}{ext}')
+        return osp.join(MODEL_DIR, f'{model_basename}{ext}')
 
     def transfer_learn(self, model_output_layer_factory, n_out_features):
         """
@@ -485,8 +555,8 @@ class Regressor(Loggable):
 
 
 class BinaryClassifier(Regressor):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=None, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle,  device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0):
+        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
@@ -658,7 +728,7 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
 
 
 class MultiClassifier(BinaryClassifier):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optimizer='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=None, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optimizer='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=_logger, log_every_n_epochs=0):
         super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
@@ -709,7 +779,7 @@ class MultiClassifier(BinaryClassifier):
 # endregion
 
 
-# region visualization
+# region visualization and profiling
 
 class Plot:
     def __init__(self, *args, **kwargs):
@@ -839,6 +909,11 @@ class Plot:
     @staticmethod
     def close():
         plt.close()
+
+
+def show_profile(log_dir=PROFILE_DIR):
+    util.run_daemon([shutil.which('tensorboard'), '--logdir', log_dir])
+    util.open_in_browser('http://localhost:6006/', islocal=False, foreground=True)
 
 
 # endregion

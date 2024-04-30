@@ -91,9 +91,9 @@ def test_regressor():
     pred_set = copy.deepcopy(test_set)
     y_preds = regressor.predict(pred_set)
     assert tc.allclose(y_preds, pred_set.targets, atol=0.1)
-    regressor.save('test_model')
+    regressor.save_model('test_model')
     assert osp.isfile(mdl := osp.join(util.get_platform_appdata_dir(), 'torch', 'test_model.pth'))
-    regressor.load('test_model')
+    regressor.load_model('test_model')
     util.safe_remove(mdl)
     regressor.close_plot()
     assert regressor.get_performance()['test'] < 0.2
@@ -262,6 +262,7 @@ def test_transfer_learning():
     - predict a new image
     - experiment to refine the model using tensorboard
     """
+
     def _create_model_output_layer(n_out_features):
         return tc.nn.Sequential(
             # avoid overfitting
@@ -271,6 +272,7 @@ def test_transfer_learning():
             tc.nn.Dropout(p=0.2, inplace=True),
             tc.nn.Linear(in_features=1280, out_features=n_out_features)
         )
+
     # lazy retrieve data
     pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi.zip')
     time.sleep(1)
@@ -315,3 +317,102 @@ def test_transfer_learning():
     pred_set = ktc.ImagePredictionDataset(test_img, data_transform)
     y_pred = classifier.predict(pred_set)
     assert train_data.classes[y_pred.argmax()] == 'pizza'
+
+
+def test_tensorboard_profiler():
+    """
+    - based on the experiment plan
+        Let's try a combination of:
+
+        A different amount of data (10% of Pizza, Steak, Sushi vs. 20%)
+        A different model (tcv.models.efficientnet_b0 vs. tcv.models.efficientnet_b2)
+        A different training time (5 epochs vs. 10 epochs)
+        Breaking these down we get:
+
+        Experiment number	Training Dataset	Model (pretrained on ImageNet)	Number of epochs
+        1	Pizza, Steak, Sushi 10% percent	EfficientNetB0	5
+        2	Pizza, Steak, Sushi 10% percent	EfficientNetB2	5
+        3	Pizza, Steak, Sushi 10% percent	EfficientNetB0	10
+        4	Pizza, Steak, Sushi 10% percent	EfficientNetB2	10
+        5	Pizza, Steak, Sushi 20% percent	EfficientNetB0	5
+        6	Pizza, Steak, Sushi 20% percent	EfficientNetB2	5
+        7	Pizza, Steak, Sushi 20% percent	EfficientNetB0	10
+        8	Pizza, Steak, Sushi 20% percent	EfficientNetB2  10
+    """
+    def _create_outlayer_effnetb0(n_out_features):
+        return tc.nn.Sequential(
+            tc.nn.Dropout(p=0.2),
+            tc.nn.Linear(in_features=1280, out_features=n_out_features)
+        )
+
+    def _create_outlayer_effnetb2(n_out_features):
+        return tc.nn.Sequential(
+            tc.nn.Dropout(p=0.3),
+            tc.nn.Linear(in_features=1408, out_features=n_out_features)
+        )
+    #
+    # prepare datasets for two model experiment series
+    #
+    pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi.zip')
+    time.sleep(1)
+    util.unzip_dir(pizza_steak_sushi_data, root_10perc := osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi'))
+    pizza_steak_sushi_data = util.lazy_download(osp.join(_gen_dir, 'pizza_steak_sushi_20_percent.zip'), 'https://github.com/mrdbourke/pytorch-deep-learning/raw/main/data/pizza_steak_sushi_20_percent.zip')
+    time.sleep(1)
+    util.unzip_dir(pizza_steak_sushi_data, root_10perc := osp.abspath(f'{_gen_dir}/data/pizza_steak_sushi_20_percent.zip'))
+    # transform data to conform to model (ImageNet): values are per RGB channel
+    from torchvision import transforms
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225], )
+    simple_transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # 1. Resize the images
+        transforms.ToTensor(),  # 2. images => tensors with values b/w [0, 1]
+        normalize  # 3. Normalize for img distributions to match ImageNet dataset
+    ])
+    train_data_10perc, test_data_10perc = ktc.ImageFolderDatasetFactory(root_10perc, simple_transform).create()
+    train_data_20perc, test_data_20perc = ktc.ImageFolderDatasetFactory(root_10perc, simple_transform).create()
+    #
+    # create models
+    #
+    # 1. Create an instance of EffNetB2 with pretrained weights
+    # - "DEFAULT": best available weights
+    effnetb2_weights = tcv.models.EfficientNet_B2_Weights.DEFAULT
+    effnetb2 = tcv.models.efficientnet_b2(weights=effnetb2_weights)
+    # 2. Get a summary of standard EffNetB2 from tcv.models (uncomment for full output)
+    ti.summary(model=effnetb2,
+               input_size=(32, 3, 224, 224),  # make sure this is "input_size", not "input_shape"
+               # col_names=["input_size"], # uncomment for smaller output
+               col_names=["input_size", "output_size", "num_params", "trainable"],
+               col_width=20,
+               row_settings=["var_names"]
+               )
+    # 3. Get the number of in_features of the EfficientNetB2 classifier layer
+    print(f"Number of in_features to final layer of EfficientNetB2: {len(effnetb2.classifier.state_dict()['1.weight'][0])}")
+
+    # Get num out features (one for each class pizza, steak, sushi)
+    OUT_FEATURES = len(train_data_10perc.classes)
+    # 1. Get the base mdoel with pretrained weights and send to target device
+    weights = tcv.models.EfficientNet_B0_Weights.DEFAULT
+    model1 = tcv.models.efficientnet_b0(weights=weights)
+    model1.name = "effnetb0"
+    classifier_effnetb0 = ktc.MultiClassifier(model1, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True)
+    classifier_effnetb0.transfer_learn(_create_outlayer_effnetb0, OUT_FEATURES)
+    print(f"[INFO] Created new {model1.name} model.")
+
+    # Create an EffNetB2 feature extractor
+    weights = tcv.models.EfficientNet_B2_Weights.DEFAULT
+    model2 = tcv.models.efficientnet_b2(weights=weights)
+    model2.name = "effnetb2"
+    classifier_effnetb2 = ktc.MultiClassifier(model2, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True)
+    classifier_effnetb2.transfer_learn(_create_outlayer_effnetb2, OUT_FEATURES)
+    print(f"[INFO] Created new {model2.name} model.")
+    n_epochs = [5, 10]
+    classifiers = [classifier_effnetb0, classifier_effnetb2]
+    train_sets = [train_data_10perc, train_data_20perc]
+    test_sets = [test_data_10perc, test_data_20perc]
+    for classifier in classifiers:
+        for d, (train_set, test_set) in enumerate(zip(train_sets, test_sets)):
+            for n_epoch in n_epochs:
+                classifier.train(train_set, test_set, n_epochs=n_epoch)
+                classifier.save_model(f'{classifier.model.name}_dataset{d}_{n_epoch}epochs')
+                print("-" * 50 + "\n")
+    ktc.show_profile(log_dir=ktc.PROFILE_DIR)

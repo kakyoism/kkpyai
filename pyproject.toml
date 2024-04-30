@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "kkpyai"
-version = "0.15.1"
+version = "0.16.0"
 description = "Utility over popular low-level AI API"
 authors = ["Beinan Li <li.beinan@gmail.com>"]
 readme = "README.md"
@@ -8,14 +8,15 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 kkpyutil = "*"
+expecttest = "*"
 matplotlib = "*"
 mlxtend = "*"
 scikit-learn = "*"
-tensorflow = "*"
 torch = "*"
 torchinfo = "*"
 torchmetrics = "*"
 tqdm = "*"
+tensorboard = "^2.16.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"
