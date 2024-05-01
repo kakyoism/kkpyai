@@ -1,4 +1,5 @@
 import copy
+import os
 import os.path as osp
 import sys
 import time
@@ -339,6 +340,7 @@ def test_tensorboard_profiler():
         7	Pizza, Steak, Sushi 20% percent	EfficientNetB0	10
         8	Pizza, Steak, Sushi 20% percent	EfficientNetB2  10
     """
+
     def _create_outlayer_effnetb0(n_out_features):
         return tc.nn.Sequential(
             tc.nn.Dropout(p=0.2),
@@ -350,6 +352,7 @@ def test_tensorboard_profiler():
             tc.nn.Dropout(p=0.3),
             tc.nn.Linear(in_features=1408, out_features=n_out_features)
         )
+
     #
     # prepare datasets for two model experiment series
     #
@@ -393,26 +396,36 @@ def test_tensorboard_profiler():
     # 1. Get the base mdoel with pretrained weights and send to target device
     weights = tcv.models.EfficientNet_B0_Weights.DEFAULT
     model1 = tcv.models.efficientnet_b0(weights=weights)
-    model1.name = "effnetb0"
-    classifier_effnetb0 = ktc.MultiClassifier(model1, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True)
+    # name model after "task-model" pattern
+    model1.name = "test_tensorboard_profiler-effnetb0"
+    classifier_effnetb0 = ktc.MultiClassifier(model1, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True, description='Test TensorBoard Profiler with the smallest model EfficientNetB0, with various datasets and epochs')
     classifier_effnetb0.transfer_learn(_create_outlayer_effnetb0, OUT_FEATURES)
     print(f"[INFO] Created new {model1.name} model.")
-
     # Create an EffNetB2 feature extractor
     weights = tcv.models.EfficientNet_B2_Weights.DEFAULT
     model2 = tcv.models.efficientnet_b2(weights=weights)
-    model2.name = "effnetb2"
-    classifier_effnetb2 = ktc.MultiClassifier(model2, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True)
+    model2.name = "test_tensorboard_profiler-effnetb2"
+    classifier_effnetb2 = ktc.MultiClassifier(model2, optimizer='Adam', learning_rate=0.01, batch_size=32, log_every_n_epochs=100, transfer=True, description='Test TensorBoard Profiler with a bigger model EfficientNetB2, with various datasets and epochs')
     classifier_effnetb2.transfer_learn(_create_outlayer_effnetb2, OUT_FEATURES)
     print(f"[INFO] Created new {model2.name} model.")
     n_epochs = [5, 10]
     classifiers = [classifier_effnetb0, classifier_effnetb2]
     train_sets = [train_data_10perc, train_data_20perc]
     test_sets = [test_data_10perc, test_data_20perc]
+    # # debug
+    # n_epochs = [1]
+    # classifiers = [classifier_effnetb0]
+    # train_sets = [train_data_10perc]
+    # test_sets = [test_data_10perc]
+    ktc.PROFILE_DIR = osp.join(_gen_dir, 'profile')
+    util.safe_remove(ktc.PROFILE_DIR)
     for classifier in classifiers:
         for d, (train_set, test_set) in enumerate(zip(train_sets, test_sets)):
             for n_epoch in n_epochs:
+                classifier.model.name = f"{classifier.model.name}-{d}-{n_epoch}"
                 classifier.train(train_set, test_set, n_epochs=n_epoch)
-                classifier.save_model(f'{classifier.model.name}_dataset{d}_{n_epoch}epochs')
                 print("-" * 50 + "\n")
-    ktc.show_profile(log_dir=ktc.PROFILE_DIR)
+    ktc.show_profiles(log_dir=ktc.PROFILE_DIR)
+    ktc.browse_profiles(log_dir=ktc.PROFILE_DIR)
+    assert len(os.listdir(ktc.PROFILE_DIR)) == len(classifiers) * len(train_sets) * len(n_epochs)
+    util.safe_remove(ktc.PROFILE_DIR)

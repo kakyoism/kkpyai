@@ -2,6 +2,7 @@ import functools
 import operator
 import os
 import os.path as osp
+import platform
 import pprint as pp
 import shutil
 import time
@@ -289,36 +290,9 @@ class Regressor(Loggable):
     """
     LossFuncType = typing.Callable[[tc.Tensor, tc.Tensor], tc.Tensor]
 
-    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0):
+    def __init__(self, model, loss_fn: typing.Union[str, LossFuncType] = 'L1', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0,
+                 description='TODO: describe the purpose'):
         super().__init__(logger)
-
-        def _create_profiler():
-            """
-            - pattern: profile_dir > task > timestamp > experiment-model
-            - experiment: the name of this ctor's caller, i.e., create a function/method to represent an experiment
-            - write docstring for the caller as the experiment description
-            - model.name: task name
-            - typical scenario: for a given task, run several models with different hyperparameters, then show the profile in tensorboard
-            """
-            from datetime import datetime
-            import inspect
-            from torch.utils.tensorboard import SummaryWriter
-            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            caller_frame = inspect.stack()[1]
-            # Get the caller's frame object
-            caller_frame_object = caller_frame.frame
-            # Get the name of the caller function or method
-            caller_name = caller_frame_object.f_code.co_name
-            # Get the caller's module name
-            caller_module_name = caller_frame_object.f_globals["__name__"]
-            # Import the module
-            caller_module = __import__(caller_module_name)
-            # Get the caller function or method object using getattr. This might need adjustment
-            # if the caller is a method of a class.
-            caller_function = getattr(caller_module, caller_name)
-            docstr = caller_function.__doc__
-            prof_dir = osp.join(PROFILE_DIR, timestamp, f'{caller_frame.function}-{type(model).__name__}')
-            return SummaryWriter(log_dir=prof_dir, comment=docstr)
 
         self.device = device_name or probe_fast_device()
         self.model = model.to(self.device)
@@ -337,7 +311,9 @@ class Regressor(Loggable):
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
         self.plot = Plot()
-        self.profiler = _create_profiler()
+        self.runDir = None
+        self.desc = description
+        self.profiler = None
 
     @staticmethod
     def init_epoch_metric():
@@ -366,7 +342,7 @@ class Regressor(Loggable):
         - have split train/test sets for easy tracking learning performance side-by-side
         - both datasets must contain data and labels
         """
-        start_time = perf_timer()
+        start_time = self.start_profiler(train_set)
         tc.manual_seed(seed)
         # Turn datasets into iterables (batches)
         train_dl = tud.DataLoader(train_set, batch_size=self.batchSize, shuffle=self.shuffleBatchEveryEpoch, pin_memory=True)
@@ -375,7 +351,6 @@ class Regressor(Loggable):
             # no need to shuffle test data
             test_dl = tud.DataLoader(test_set, batch_size=self.batchSize, shuffle=False, pin_memory=True)
         # reset
-        self.profile_model_arch(train_set)
         self.epochLosses = self.init_epoch_metric()
         self.epochMetrics = self.init_epoch_metric()
         verbose = self.logPeriodEpoch > 0
@@ -408,12 +383,9 @@ class Regressor(Loggable):
             if verbose:
                 self.log_epoch(epoch)
             self.profile_latest_epoch()
-        stop_time = perf_timer()
-        self.profiler.close()
         # final test predictions
-        self.evaluate_training(start_time, stop_time)
-        if verbose:
-            self.plot_learning()
+        self.evaluate_training()
+        self.stop_profiler(seed, n_epochs, start_time, train_set)
         return test_pred
 
     def predict(self, data_set):
@@ -453,10 +425,16 @@ class Regressor(Loggable):
             'loss': mean_loss,
         }
 
-    def profile_model_arch(self, dataset):
+    def start_profiler(self, dataset):
+        from datetime import datetime
+        from torch.utils.tensorboard import SummaryWriter
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        self.runDir = osp.join(PROFILE_DIR, timestamp, self.model.name)
+        self.profiler = SummaryWriter(log_dir=self.runDir, comment=self.desc)
         data, target = dataset[0]
-        self.profiler.add_graph(model=self.model,
+        self.profiler.add_graph(model=self.model.to(self.device),
                                 input_to_model=data.unsqueeze(0).to(self.device))
+        return perf_timer()
 
     def profile_latest_epoch(self):
         epoch = len(self.epochLosses['train']['epoch']) - 1
@@ -470,6 +448,55 @@ class Regressor(Loggable):
                                   tag_scalar_dict={"trainAcc": self.epochMetrics['train']['epoch'][epoch],
                                                    "testAcc": self.epochMetrics['test']['epoch'][epoch]},
                                   global_step=epoch)
+
+    def stop_profiler(self, seed, n_epochs, start_time, train_set):
+        import psutil
+        import torchinfo as ti
+        stop_time = perf_timer()
+        self.profiler.close()
+        # dump all run info
+        self.save_model()
+        input_size = train_set[0][0].shape
+        model_stats = ti.summary(self.model,
+                                 input_size=[batch := 1, *input_size],
+                                 verbose=0)
+        util.save_text(osp.join(self.runDir, 'model.log'), str(model_stats))
+        hyper_params = {
+            'model': self.model.name,
+            'archetype': type(self.model).__name__,
+            'description': self.desc,
+            'device': self.device,
+            'epochs': n_epochs,
+            'learningRate': self.learningRate,
+            'lossFunction': type(self.lossFunction).__name__,
+            'optimizer': type(self.optimizer).__name__,
+            'batchSize': self.batchSize,
+            'seed': seed,
+            'trainDurationSec': f'{stop_time - start_time:.3f}s',
+            'torch': tc.__version__,
+        }
+        env = {
+            'os': platform.system(),
+            'osVersion': platform.version(),
+            'osRelease': platform.release(),
+            'arch': platform.machine(),
+            'cpu': f'{psutil.cpu_freq()} x {os.cpu_count()}',
+            'physicalMemoryGB': os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / (1024. ** 3),
+            'python': platform.python_version(),
+        }
+        util.save_json(osp.join(self.runDir, 'hyperparams.json'), hyper_params)
+        util.save_json(osp.join(self.runDir, 'env.json'), env)
+        proc = util.run_cmd(['nvidia-smi'], useexception=False)
+        util.save_text(osp.join(self.runDir, 'gpu.log'), f"""\
+RETURN CODE:
+{proc.returncode} 
+
+STDOUT: 
+{proc.stdout}
+
+STDERR:
+{proc.stderr}""")
+        self.logger.info(f'Training time on device {self.device}: {hyper_params["trainDurationSec"]}s')
 
     def plot_learning(self):
         """
@@ -502,12 +529,12 @@ class Regressor(Loggable):
         """
         pass
 
-    def evaluate_training(self, start_time, stop_time):
+    def evaluate_training(self):
         """
         - training time
         - loss and metric
         """
-        self.logger.info(f'Training time on device {self.device}: {stop_time - start_time:.3f}s')
+        pass
 
     def get_performance(self):
         return {'train': self.epochLosses['train']['epoch'][-1], 'test': self.epochLosses['test']['epoch'][-1]}
@@ -525,20 +552,36 @@ class Regressor(Loggable):
     def close_plot(self):
         self.plot.close()
 
-    def save_model(self, model_basename=None, optimized=True):
+    def save_model(self, optimized=True):
+        """
+        - usually called by profiler to save model after training
+        - user can manually clean up W.I.P. models later if no need to archive them
+        """
         ext = '.pth' if optimized else '.pt'
-        path = self._compose_model_name(model_basename, ext)
+        path = osp.join(self.runDir, f'{self.model.name}{ext}')
         os.makedirs(osp.dirname(path), exist_ok=True)
         tc.save(self.model.state_dict(), path)
 
-    def load_model(self, model_basename=None, optimized=True):
-        ext = '.pth' if optimized else '.pt'
-        path = self._compose_model_name(model_basename, ext)
-        self.model.load_state_dict(tc.load(path))
+    def load_model(self, path):
+        """
+        - load saved or archived model
+        - saved model: full path including run folder
+        - archived model: model stem name without the file extension
+        """
+        full_path = osp.join(MODEL_DIR, f'{path}.pth') if not osp.isabs(path) else path
+        self.model.load_state_dict(tc.load(full_path))
 
-    @staticmethod
-    def _compose_model_name(model_basename, ext):
-        return osp.join(MODEL_DIR, f'{model_basename}{ext}')
+    def archive_model(self):
+        """
+        - after experiments, save valuable models for later use
+        """
+        ext = '.pth'
+        path = self._compose_model_path(ext)
+        os.makedirs(osp.dirname(path), exist_ok=True)
+        tc.save(self.model.state_dict(), path)
+
+    def _compose_model_path(self, ext):
+        return osp.join(MODEL_DIR, f'{self.model.name}{ext}')
 
     def transfer_learn(self, model_output_layer_factory, n_out_features):
         """
@@ -555,8 +598,9 @@ class Regressor(Loggable):
 
 
 class BinaryClassifier(Regressor):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'BCE', optimizer='SGD', transfer=False, learning_rate=0.01, batch_size=32, shuffle=True, device_name=None, logger=_logger, log_every_n_epochs=0,
+                 description='TODO: describe the purpose'):
+        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs, description)
         # TODO: parameterize metric type
         self.metrics = {'train': tm.classification.Accuracy(task='binary').to(self.device), 'test': tm.classification.Accuracy(task='binary').to(self.device)}
         self.performance = {'train': None, 'test': None}
@@ -676,8 +720,7 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
     def evaluate_epoch(self, dataloader, dataset_name='train'):
         self.epochMetrics[dataset_name]['epoch'].append(measure_epoch := (sum(self.epochMetrics[dataset_name]['_batch']) / len(dataloader)).item())
 
-    def evaluate_training(self, start_time, stop_time):
-        super().evaluate_training(start_time, stop_time)
+    def evaluate_training(self):
         for dataset_name in ['train', 'test']:
             self.performance[dataset_name] = sum(self.epochMetrics[dataset_name]['epoch']) / len(self.epochMetrics[dataset_name]['epoch'])
             self.logger.info(f'{dataset_name.capitalize()} Performance ({type(self.metrics[dataset_name]).__name__}): {100 * self.performance[dataset_name]:.4f}%')
@@ -728,8 +771,9 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
 
 
 class MultiClassifier(BinaryClassifier):
-    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optimizer='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=_logger, log_every_n_epochs=0):
-        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs)
+    def __init__(self, model, loss_fn: typing.Union[str, Regressor.LossFuncType] = 'CrossEntropy', optimizer='SGD', learning_rate=0.01, batch_size=32, shuffle=True, transfer=False, device_name=None, logger=_logger, log_every_n_epochs=0,
+                 description='TODO: describe the purpose'):
+        super().__init__(model, loss_fn, optimizer, transfer, learning_rate, batch_size, shuffle, device_name, logger, log_every_n_epochs, description)
         self.labelCountIsKnown = False
         # we don't know label count until we see the first batch
         self.metrics = {'train': None, 'test': None}
@@ -911,9 +955,19 @@ class Plot:
         plt.close()
 
 
-def show_profile(log_dir=PROFILE_DIR):
-    util.run_daemon([shutil.which('tensorboard'), '--logdir', log_dir])
-    util.open_in_browser('http://localhost:6006/', islocal=False, foreground=True)
+def show_profiles(log_dir=PROFILE_DIR, port=6006):
+    """
+    - best practice for experiment-based profiling:
+      - always create a function to represent an experiment, naming it after intents, and describe it in its docstring
+      - for easy recall, a train loop should generate profile directly under profile_root/timestamp-experiment-model, where "experiment" is extract automatically from the caller's name
+      - dev can later reorganize these runs into a more structured format for archive, e.g., under a task folder elsewhere
+    """
+    util.run_daemon([shutil.which('tensorboard'), '--logdir', log_dir, '--port', str(port)])
+    util.open_in_browser(f'http://localhost:{port}/', islocal=False, foreground=True)
+
+
+def browse_profiles(log_dir=PROFILE_DIR):
+    util.open_in_browser(log_dir, islocal=True, foreground=True)
 
 
 # endregion
