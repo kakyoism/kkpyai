@@ -899,7 +899,7 @@ class Plot:
 
     def plot_image_predictions(self, img_set, predictions, n_rows=4, n_cols=4, fig_size=(9, 9), color_map=None, pick_random=True, seed=None):
         """
-        - img_set must be a torchvision dataset, not dataproxy
+        - img_set must be a torchvision dataset
         """
         if seed:
             tc.manual_seed(seed)
@@ -959,7 +959,7 @@ def show_profiles(log_dir=PROFILE_DIR, port=6006):
     """
     - best practice for experiment-based profiling:
       - always create a function to represent an experiment, naming it after intents, and describe it in its docstring
-      - for easy recall, a train loop should generate profile directly under profile_root/timestamp-experiment-model, where "experiment" is extract automatically from the caller's name
+      - for easy recall, a train loop should generate profile directly at profile_root/timestamp/experiment-model
       - dev can later reorganize these runs into a more structured format for archive, e.g., under a task folder elsewhere
     """
     util.run_daemon([shutil.which('tensorboard'), '--logdir', log_dir, '--port', str(port)])
