@@ -318,6 +318,8 @@ def test_transfer_learning():
     pred_set = ktc.ImagePredictionDataset(test_img, data_transform)
     y_pred = classifier.predict(pred_set)
     assert train_data.classes[y_pred.argmax()] == 'pizza'
+    assert classifier.get_parameter_count() == 4011391
+    assert classifier.get_model_name() == 'efficientnet_b0'
 
 
 def test_tensorboard_profiler():

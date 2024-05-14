@@ -323,6 +323,12 @@ class Regressor(Loggable):
         self.epochLosses[dataset_name]['_batch'] = []
         self.epochMetrics[dataset_name]['_batch'] = []
 
+    def get_parameter_count(self):
+        return sum(tc.numel(p) for p in self.model.parameters())
+
+    def get_model_name(self):
+        return self.model.name if hasattr(self.model, 'name') else type(self.model).__name__
+
     def set_lossfunction(self, loss_fn: typing.Union[str, LossFuncType] = 'L1Loss'):
         """
         - ref: https://pytorch.org/docs/stable/nn.html#loss-functions
@@ -429,7 +435,7 @@ class Regressor(Loggable):
         from datetime import datetime
         from torch.utils.tensorboard import SummaryWriter
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        self.runDir = osp.join(PROFILE_DIR, timestamp, self.model.name)
+        self.runDir = osp.join(PROFILE_DIR, timestamp, self.get_model_name())
         self.profiler = SummaryWriter(log_dir=self.runDir, comment=self.desc)
         data, target = dataset[0]
         self.profiler.add_graph(model=self.model.to(self.device),
@@ -462,7 +468,7 @@ class Regressor(Loggable):
                                  verbose=0)
         util.save_text(osp.join(self.runDir, 'model.log'), str(model_stats))
         hyper_params = {
-            'model': self.model.name,
+            'model': self.get_model_name(),
             'archetype': type(self.model).__name__,
             'description': self.desc,
             'device': self.device,
@@ -558,7 +564,7 @@ STDERR:
         - user can manually clean up W.I.P. models later if no need to archive them
         """
         ext = '.pth' if optimized else '.pt'
-        path = osp.join(self.runDir, f'{self.model.name}{ext}')
+        path = osp.join(self.runDir, f'{self.get_model_name()}{ext}')
         os.makedirs(osp.dirname(path), exist_ok=True)
         tc.save(self.model.state_dict(), path)
 
@@ -570,6 +576,8 @@ STDERR:
         """
         full_path = osp.join(MODEL_DIR, f'{path}.pth') if not osp.isabs(path) else path
         self.model.load_state_dict(tc.load(full_path))
+        # size in MB
+        return osp.getsize(full_path) / (1024 ** 2)
 
     def archive_model(self):
         """
@@ -581,7 +589,7 @@ STDERR:
         tc.save(self.model.state_dict(), path)
 
     def _compose_model_path(self, ext):
-        return osp.join(MODEL_DIR, f'{self.model.name}{ext}')
+        return osp.join(MODEL_DIR, f'{self.get_model_name()}{ext}')
 
     def transfer_learn(self, model_output_layer_factory, n_out_features):
         """
