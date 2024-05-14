@@ -245,7 +245,7 @@ def test_image_classifier():
                                      log_every_n_epochs=100)
     train_set = ktc.StdImageDataset(train_data)
     test_set = ktc.StdImageDataset(test_data)
-    classifier.train(train_set, test_set, n_epochs=3)
+    classifier.train(train_set, test_set, n_epochs=5)
     perf = classifier.evaluate_model(test_set)
     plot = ktc.Plot()
     plot.unblock()

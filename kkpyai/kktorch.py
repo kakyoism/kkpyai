@@ -646,6 +646,9 @@ class BinaryClassifier(Regressor):
         mean_loss, mean_acc = 0, 0
         task = 'binary' if n_classes == 2 else 'multiclass'
         metric = tm.classification.Accuracy(task=task).to(self.device) if n_classes < 3 else tm.classification.Accuracy(task=task, num_classes=n_classes).to(self.device)
+        # Fixed: test_image_classifier
+        # - RuntimeError: Input type (MPSFloatType) and weight type (torch.FloatTensor) should be the same
+        self.model.to(self.device)
         self.model.eval()
         # - forward pass
         n_dims_label = 1 if n_classes == 2 else n_classes
@@ -663,6 +666,7 @@ class BinaryClassifier(Regressor):
             'model': type(self.model).__name__,
             'loss': mean_loss,
             'accuracy': mean_acc,
+            'parameter size': self.get_parameter_count(),
         }
 
     def forward_pass(self, X, y_true, dataset_name='train'):
