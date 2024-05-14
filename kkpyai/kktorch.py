@@ -504,12 +504,15 @@ STDERR:
 {proc.stderr}""")
         self.logger.info(f'Training time on device {self.device}: {hyper_params["trainDurationSec"]}s')
 
-    def plot_learning(self):
+    def plot_learning(self, plot_blocks_run=False):
         """
         - prediction quality
         - learning curves
         """
-        self.plot.unblock()
+        if plot_blocks_run:
+            self.plot.block()
+        else:
+            self.plot.unblock()
         self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
 
     def forward_pass(self, X, y_true, dataset_name='train'):
@@ -568,6 +571,15 @@ STDERR:
         os.makedirs(osp.dirname(path), exist_ok=True)
         tc.save(self.model.state_dict(), path)
 
+    def save_scratch_model(self, optimized=True):
+        """
+        - save model for later use
+        """
+        ext = '.pth' if optimized else '.pt'
+        path = osp.join(MODEL_DIR, f'{self.get_model_name()}{ext}')
+        os.makedirs(osp.dirname(path), exist_ok=True)
+        tc.save(self.model.state_dict(), path)
+
     def load_model(self, path):
         """
         - load saved or archived model
@@ -578,6 +590,11 @@ STDERR:
         self.model.load_state_dict(tc.load(full_path))
         # size in MB
         return osp.getsize(full_path) / (1024 ** 2)
+
+    def load_scratch_model(self):
+        path = osp.join(MODEL_DIR, f'{self.get_model_name()}.pth')
+        self.model.load_state_dict(tc.load(path))
+        return osp.getsize(path) / (1024 ** 2)
 
     def archive_model(self):
         """
@@ -741,12 +758,15 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
     def get_performance(self):
         return self.performance
 
-    def plot_learning(self):
-        self.plot.unblock()
+    def plot_learning(self, plot_blocks_run=False):
+        if plot_blocks_run:
+            self.plot.block()
+        else:
+            self.plot.unblock()
         self.plot.plot_learning(self.epochLosses['train']['epoch'], self.epochLosses['test']['epoch'])
         self.plot.plot_performance(self.epochMetrics['train']['epoch'], self.epochMetrics['test']['epoch'], type(self.metrics['train']).__name__)
 
-    def plot_2d_predictions(self, train_set, test_set, predictions=None):
+    def plot_2d_predictions(self, train_set, test_set, predictions=None, plot_blocks_run=False):
         """
         - assume 2D dataset (ds.data is [dim1, dim2]), plot decision boundaries
         - create special dataset and run model on it for visualization (2D)
@@ -774,6 +794,10 @@ Train Loss: {train_loss_percent:.4f}% | Train Accuracy: {train_acc_percent:.4f}%
             self.model.to(self.device)
             return y_pred.reshape(xx.shape).detach().numpy()
 
+        if plot_blocks_run:
+            self.plot.block()
+        else:
+            self.plot.unblock()
         if train_set:
             train_pred = _predict_dataset(train_set)
             self.plot.plot_decision_boundary(train_set, train_pred)

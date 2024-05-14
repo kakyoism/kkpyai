@@ -1,5 +1,5 @@
 # project
-test/_gen
+test/**/_gen
 test/skip_slow_tests.cfg.txt
 # JetBrains
 .idea/copilot
